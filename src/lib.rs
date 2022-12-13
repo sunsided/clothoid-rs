@@ -54,6 +54,8 @@ impl Clothoid {
     }
 }
 
+/// Auxiliary functions f(x) and g(x) for calculating the
+/// Fresnel sines and cosines, S(X) and C(x).
 struct AuxFg {
     pub f: f64,
     pub g: f64,
@@ -61,11 +63,10 @@ struct AuxFg {
 
 impl AuxFg {
     pub fn compute(x: f64) -> Self {
-        // debug_assert_ne!(x, 0.);
-
         let x2 = x * x;
         let x3 = x * x * x;
 
+        // TODO: Quote paper and book
         let f = (1. + 0.926 * x) / (2. + 1.792 * x + 3.104 * x2);
         let g = 1. / (2. + 4.142 * x + 3.492 * x2 + 6.670 * x3);
 
@@ -73,12 +74,17 @@ impl AuxFg {
     }
 }
 
+/// Fresnel sines and cosines, S(x) and C(x).
 struct FresnelSinCos {
+    /// C(x)
     pub cos: f64,
+    /// S(x)
     pub sin: f64,
 }
 
 impl FresnelSinCos {
+    /// Calculates the Fresnel sines and cosines, S(x) and C(x)
+    /// by means of the auxiliary functions f(x) and g(x) (see [`AuxFg::compute`]).
     pub fn compute(x: f64) -> Self {
         let aux = AuxFg::compute(x);
         let (sin, cos) = (x * x * std::f64::consts::FRAC_PI_2).sin_cos();
@@ -112,6 +118,8 @@ mod tests {
         let pt = clothoid.calculate_fresnl(std::f64::consts::PI);
         assert_f64_near!(pt.x, 6.7669799976205);
         assert_f64_near!(pt.y, 4.615663254508842);
+
+        // http://jsxgraph.uni-bayreuth.de/wiki/index.php/Euler's_spiral_(Clothoid)
     }
 
     #[test]
@@ -124,5 +132,30 @@ mod tests {
         let pt = clothoid.calculate_approx(std::f64::consts::PI);
         assert_f64_near!(pt.x, 6.777113091819308);
         assert_f64_near!(pt.y, 4.588251163366395);
+    }
+
+    #[test]
+    fn pochhammer() {
+        // https://dlmf.nist.gov/7.12
+        // https://dlmf.nist.gov/5.2#iii
+
+        fn p(a: f64, n: usize) -> f64 {
+            if n == 0 {
+                return 1.;
+            }
+            let mut product = 1.;
+            for i in 0..n {
+                product *= a + (i as f64)
+            }
+            product
+        }
+
+        assert_eq!(p(0.5, 0), 1.);
+        assert_eq!(p(0.5, 1), 0.5);
+        assert_eq!(p(0.5, 2), 0.75);
+        assert_eq!(p(0.5, 3), 1.875);
+        assert_eq!(p(0.5, 7), 1055.7421875);
+
+        // https://docs.google.com/spreadsheets/d/1xQJsACKpuro7ReS3RGYlTHNxuw4o7TUoN4E6i2s_Iwo/edit#gid=0
     }
 }
