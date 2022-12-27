@@ -1,3 +1,4 @@
+#[cfg(feature = "fresnel")]
 use fresnel::fresnl;
 
 #[derive(Debug, Default, Copy, Clone, PartialOrd, PartialEq)]
@@ -24,7 +25,7 @@ impl Clothoid {
         0.5 * (arc_length * arc_length) / (self.a * self.a)
     }
 
-    fn calculate(&self, t: f64) -> Point2 {
+    pub fn calculate(&self, t: f64) -> Point2 {
         #[cfg(feature = "fresnel")]
         {
             self.calculate_fresnl(t)
