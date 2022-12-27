@@ -1,5 +1,3 @@
-use fresnel::fresnl;
-
 #[derive(Debug, Default, Copy, Clone, PartialOrd, PartialEq)]
 pub struct Point2 {
     pub x: f64,
@@ -38,7 +36,7 @@ impl Clothoid {
 
     #[cfg(feature = "fresnel")]
     fn calculate_fresnl(&self, t: f64) -> Point2 {
-        let (s, c) = fresnl(t * Self::INV_PI_SQRT);
+        let (s, c) = fresnel::fresnl(t * Self::INV_PI_SQRT);
         Point2 {
             x: self.a * Self::PI_SQRT * s,
             y: self.a * Self::PI_SQRT * c,
@@ -54,19 +52,27 @@ impl Clothoid {
     }
 }
 
-/// Auxiliary functions f(x) and g(x) for calculating the
-/// Fresnel sines and cosines, S(X) and C(x).
+/// Auxiliary functions `f(x)` and `g(x)` for calculating the
+/// Fresnel sines and cosines, `S(x)` and `C(x)`.
 struct AuxFg {
     pub f: f64,
     pub g: f64,
 }
 
 impl AuxFg {
+    /// Calculates the auxiliary functions `f` and `g` for the Fresnel integrals.
+    ///
+    /// ## Sources
+    /// Doran K. Wilde, "Computing Clothoid Segments for Trajectory Generation".
+    /// IEEE/RSJ International Conference on Intelligent Robots and Systems, October 2009.
+    ///
+    /// Abramowitz, Milton and Stegun, Irene A., (Editors), "Handbook of  Mathematical
+    /// Functions with Formulas, Graphs, and Mathematical Tables".
+    /// National Bureau of Standards Applied Mathematics Series, No. 55, June 1964, pp. 295-303.
     pub fn compute(x: f64) -> Self {
         let x2 = x * x;
         let x3 = x * x * x;
 
-        // TODO: Quote paper and book
         let f = (1. + 0.926 * x) / (2. + 1.792 * x + 3.104 * x2);
         let g = 1. / (2. + 4.142 * x + 3.492 * x2 + 6.670 * x3);
 
@@ -83,8 +89,8 @@ struct FresnelSinCos {
 }
 
 impl FresnelSinCos {
-    /// Calculates the Fresnel sines and cosines, S(x) and C(x)
-    /// by means of the auxiliary functions f(x) and g(x) (see [`AuxFg::compute`]).
+    /// Calculates the Fresnel sines and cosines, `S(x)` and `C(x)`
+    /// by means of the auxiliary functions f(x)` and `g(x)` (see [`AuxFg::compute`]).
     pub fn compute(x: f64) -> Self {
         let aux = AuxFg::compute(x);
         let (sin, cos) = (x * x * std::f64::consts::FRAC_PI_2).sin_cos();
