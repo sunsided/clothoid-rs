@@ -1,3 +1,9 @@
+/// The square root of π.
+const PI_SQRT: f64 = 1.7724538509055160272981674833411451827975494561223871282138077898f64;
+
+/// The inverse of the square root of π, i.e. `1.0 / PI_SQRT` (see [`PI_SQRT`]).
+const INV_PI_SQRT: f64 = 0.5641895835477562869480794515607725858440506293289988568440857217f64;
+
 #[derive(Debug, Default, Copy, Clone, PartialOrd, PartialEq)]
 pub struct Point2 {
     pub x: f64,
@@ -10,9 +16,6 @@ pub struct Clothoid {
 }
 
 impl Clothoid {
-    const PI_SQRT: f64 = 1.7724538509055160272981674833411451827975494561223871282138077898f64;
-    const INV_PI_SQRT: f64 = 0.5641895835477562869480794515607725858440506293289988568440857217f64;
-
     pub fn new(a: f64) -> Self {
         Self { a }
     }
@@ -36,18 +39,18 @@ impl Clothoid {
 
     #[cfg(feature = "fresnel")]
     fn calculate_fresnl(&self, t: f64) -> Point2 {
-        let (s, c) = fresnel::fresnl(t * Self::INV_PI_SQRT);
+        let (s, c) = fresnel::fresnl(t * INV_PI_SQRT);
         Point2 {
-            x: self.a * Self::PI_SQRT * s,
-            y: self.a * Self::PI_SQRT * c,
+            x: self.a * PI_SQRT * s,
+            y: self.a * PI_SQRT * c,
         }
     }
 
     fn calculate_approx(&self, t: f64) -> Point2 {
-        let fsc = FresnelSinCos::compute(t * Self::INV_PI_SQRT);
+        let fsc = FresnelSinCos::compute(t * INV_PI_SQRT);
         Point2 {
-            x: self.a * Self::PI_SQRT * fsc.sin,
-            y: self.a * Self::PI_SQRT * fsc.cos,
+            x: self.a * PI_SQRT * fsc.sin,
+            y: self.a * PI_SQRT * fsc.cos,
         }
     }
 }
@@ -66,7 +69,7 @@ impl AuxFg {
     /// Doran K. Wilde, "Computing Clothoid Segments for Trajectory Generation".
     /// IEEE/RSJ International Conference on Intelligent Robots and Systems, October 2009.
     ///
-    /// Abramowitz, Milton and Stegun, Irene A., (Editors), "Handbook of  Mathematical
+    /// Abramowitz, Milton and Stegun, Irene A., (Editors), "Handbook of Mathematical
     /// Functions with Formulas, Graphs, and Mathematical Tables".
     /// National Bureau of Standards Applied Mathematics Series, No. 55, June 1964, pp. 295-303.
     pub fn compute(x: f64) -> Self {
