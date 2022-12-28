@@ -25,6 +25,7 @@ impl Clothoid {
         0.5 * (arc_length * arc_length) / (self.a * self.a)
     }
 
+    #[inline(always)]
     fn calculate(&self, t: f64) -> Point2 {
         #[cfg(feature = "fresnel")]
         {
@@ -114,6 +115,18 @@ mod tests {
         let clothoid = Clothoid::new(1.);
         let alpha = clothoid.direction_angle(0.);
         assert_eq!(alpha, 0.);
+    }
+
+    #[test]
+    fn calculate() {
+        let clothoid = Clothoid::new(8.);
+        let pt = clothoid.calculate(0.);
+        assert_f64_near!(pt.x, 0.);
+        assert_f64_near!(pt.y, 0.);
+
+        let pt = clothoid.calculate_approx(std::f64::consts::PI);
+        assert!((pt.x - 6.77).abs() < 0.01);
+        assert!((pt.y - 4.59).abs() < 0.01);
     }
 
     #[test]
