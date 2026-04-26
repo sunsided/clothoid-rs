@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_assignments)]
-#![allow(clippy::all)]
 
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -15,6 +14,9 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
+
+/// Seed for the LCG random number generator used by the optimizer.
+const DEFAULT_RNG_SEED: u64 = 42;
 
 // ============================================================================
 // Pose
@@ -366,7 +368,7 @@ impl SharedState {
 // ============================================================================
 
 fn run_optimizer(shared: Arc<Mutex<SharedState>>) {
-    let mut lcg = Lcg::new(42);
+    let mut lcg = Lcg::new(DEFAULT_RNG_SEED);
     let mut last_gen: u64 = u64::MAX;
     let mut n_clothoids: usize = 1;
     let mut restart_count: usize = 0;
