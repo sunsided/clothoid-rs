@@ -1,20 +1,42 @@
-/// Default seed for the LCG random number generator used by the optimizer.
+//! Path evaluation and optimization utilities for clothoid fitting.
+//!
+//! This module provides:
+//! - RK4 integration for clothoid arcs with linearly varying curvature
+//! - Path evaluation from flat parameter vectors
+//! - A Nelder-Mead simplex optimizer for derivative-free minimization
+//! - A linear congruential generator (LCG) for reproducible random initialization
+
+/// Default seed for the linear congruential generator (LCG) used by the optimizer.
+///
+/// Use a fixed seed for reproducible optimization results.
 pub const DEFAULT_RNG_SEED: u64 = 42;
 
 // ============================================================================
 // Pose
 // ============================================================================
 
-/// A 2D pose consisting of a position and a heading angle (in radians).
+/// A 2D pose consisting of a position and a heading angle.
+///
+/// The heading angle is measured in radians, counter-clockwise (CCW) from the
+/// positive X axis.
 #[derive(Clone, Debug, PartialEq, Copy)]
 pub struct Pose {
+    /// The x-coordinate of the position.
     pub x: f64,
+    /// The y-coordinate of the position.
     pub y: f64,
     /// Heading angle in radians, measured CCW from the positive X axis.
     pub angle: f64,
 }
 
 impl Pose {
+    /// Creates a new [`Pose`] with the given position and heading angle.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` — The x-coordinate.
+    /// * `y` — The y-coordinate.
+    /// * `angle` — The heading angle in radians (CCW from +X).
     pub fn new(x: f64, y: f64, angle: f64) -> Self {
         Self { x, y, angle }
     }
@@ -24,6 +46,17 @@ impl Pose {
 // Clothoid math (RK4)
 // ============================================================================
 
+/// State for a clothoid integration step.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ClothoidState {
+    /// The x-coordinate.
+    pub x: f64,
+    /// The y-coordinate.
+    pub y: f64,
+    /// The heading angle in radians.
+    pub theta: f64,
+}
+
 /// Performs a single 4th-order Runge-Kutta integration step along a clothoid arc.
 ///
 /// The clothoid has linearly varying curvature:
@@ -32,7 +65,7 @@ impl Pose {
 /// State: `(x, y, θ)`. Derivatives: `ẋ = cos θ`, `ẏ = sin θ`, `θ̇ = κ(s)`.
 ///
 /// # Arguments
-/// * `x`, `y`, `theta` - current state
+/// * `state` - current state (x, y, theta)
 /// * `ks`, `ke` - curvature at start and end of the clothoid segment
 /// * `length` - total arc length of the segment (used for curvature interpolation)
 /// * `s` - current arc-length position within the segment
@@ -40,16 +73,16 @@ impl Pose {
 ///
 /// # Returns
 /// Next state `(x, y, θ)`.
+#[allow(clippy::too_many_arguments)]
 pub fn rk4_step(
-    x: f64,
-    y: f64,
-    theta: f64,
+    state: ClothoidState,
     ks: f64,
     ke: f64,
     length: f64,
     s: f64,
     h: f64,
-) -> (f64, f64, f64) {
+) -> ClothoidState {
+    let ClothoidState { x, y, theta } = state;
     let kappa = |s: f64| ks + (ke - ks) * s / length;
 
     let (dx1, dy1, dth1) = (theta.cos(), theta.sin(), kappa(s));
@@ -63,7 +96,11 @@ pub fn rk4_step(
     let nx = x + h / 6.0 * (dx1 + 2.0 * dx2 + 2.0 * dx3 + dx4);
     let ny = y + h / 6.0 * (dy1 + 2.0 * dy2 + 2.0 * dy3 + dy4);
     let nt = theta + h / 6.0 * (dth1 + 2.0 * dth2 + 2.0 * dth3 + dth4);
-    (nx, ny, nt)
+    ClothoidState {
+        x: nx,
+        y: ny,
+        theta: nt,
+    }
 }
 
 /// Integrates a clothoid arc using RK4, returning all sampled `(x, y, θ)` states.
@@ -81,23 +118,26 @@ pub fn integrate_clothoid(
     ke: f64,
     length: f64,
     n_steps: usize,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<ClothoidState> {
     if length <= 0.0 || n_steps == 0 {
-        return vec![(x0, y0, theta0)];
+        return vec![ClothoidState {
+            x: x0,
+            y: y0,
+            theta: theta0,
+        }];
     }
     let h = length / n_steps as f64;
-    let mut x = x0;
-    let mut y = y0;
-    let mut theta = theta0;
+    let mut state = ClothoidState {
+        x: x0,
+        y: y0,
+        theta: theta0,
+    };
     let mut pts = Vec::with_capacity(n_steps + 1);
-    pts.push((x, y, theta));
+    pts.push(state);
     for step in 0..n_steps {
         let s = step as f64 * h;
-        let (nx, ny, nt) = rk4_step(x, y, theta, ks, ke, length, s, h);
-        x = nx;
-        y = ny;
-        theta = nt;
-        pts.push((x, y, theta));
+        state = rk4_step(state, ks, ke, length, s, h);
+        pts.push(state);
     }
     pts
 }
@@ -125,11 +165,13 @@ pub fn eval_path(
     n_clothoids: usize,
     start: &Pose,
     n_steps: usize,
-) -> Vec<(f64, f64, f64)> {
-    let mut x = start.x;
-    let mut y = start.y;
-    let mut theta = start.angle;
-    let mut all: Vec<(f64, f64, f64)> = vec![(x, y, theta)];
+) -> Vec<ClothoidState> {
+    let mut state = ClothoidState {
+        x: start.x,
+        y: start.y,
+        theta: start.angle,
+    };
+    let mut all: Vec<ClothoidState> = vec![state];
 
     for i in 0..n_clothoids {
         let base = 4 * i;
@@ -139,16 +181,14 @@ pub fn eval_path(
         let clen = params[base + 3].max(1e-6);
 
         if l > 1e-10 {
-            x += l * theta.cos();
-            y += l * theta.sin();
-            all.push((x, y, theta));
+            state.x += l * state.theta.cos();
+            state.y += l * state.theta.sin();
+            all.push(state);
         }
 
-        let pts = integrate_clothoid(x, y, theta, ks, ke, clen, n_steps);
-        if let Some(&(lx, ly, lt)) = pts.last() {
-            x = lx;
-            y = ly;
-            theta = lt;
+        let pts = integrate_clothoid(state.x, state.y, state.theta, ks, ke, clen, n_steps);
+        if let Some(last) = pts.last() {
+            state = *last;
         }
         if pts.len() > 1 {
             all.extend_from_slice(&pts[1..]);
@@ -157,9 +197,9 @@ pub fn eval_path(
 
     let l_final = params[4 * n_clothoids].max(0.0);
     if l_final > 1e-10 {
-        x += l_final * theta.cos();
-        y += l_final * theta.sin();
-        all.push((x, y, theta));
+        state.x += l_final * state.theta.cos();
+        state.y += l_final * state.theta.sin();
+        all.push(state);
     }
 
     all
@@ -169,28 +209,54 @@ pub fn eval_path(
 // Segmented path evaluation
 // ============================================================================
 
+/// The type of a path segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SegmentKind {
+    /// A straight-line segment.
     Linear,
+    /// A clothoid (Euler spiral) curve segment.
     Curve,
 }
 
+/// A segment of a path, consisting of sampled points and metadata.
 #[derive(Clone, Debug)]
 pub struct PathSegment {
+    /// The kind of this segment (linear or curve).
     pub kind: SegmentKind,
-    pub points: Vec<(f64, f64, f64)>,
+    /// Sampled states along the segment.
+    pub points: Vec<ClothoidState>,
+    /// The heading angle at the segment boundary.
     pub boundary_theta: f64,
 }
 
+/// Evaluates the full path described by a flat parameter vector, returning
+/// segmented results with [`SegmentKind`] tags.
+///
+/// The parameter layout is identical to [`eval_path`], but the result is
+/// structured as [`PathSegment`]s for rendering or further processing.
+///
+/// # Arguments
+///
+/// * `params` — Flat parameter slice of length `4 * n_clothoids + 1`.
+/// * `n_clothoids` — Number of clothoid arcs in the path.
+/// * `start` — Initial pose.
+/// * `n_steps` — RK4 integration steps per clothoid arc.
+///
+/// # Returns
+///
+/// A vector of [`PathSegment`]s, each tagged as [`SegmentKind::Linear`] or
+/// [`SegmentKind::Curve`].
 pub fn eval_path_segmented(
     params: &[f64],
     n_clothoids: usize,
     start: &Pose,
     n_steps: usize,
 ) -> Vec<PathSegment> {
-    let mut x = start.x;
-    let mut y = start.y;
-    let mut theta = start.angle;
+    let mut state = ClothoidState {
+        x: start.x,
+        y: start.y,
+        theta: start.angle,
+    };
     let mut segments: Vec<PathSegment> = Vec::new();
 
     for i in 0..n_clothoids {
@@ -201,22 +267,23 @@ pub fn eval_path_segmented(
         let clen = params[base + 3].max(1e-6);
 
         if l > 1e-10 {
-            let entry = (x, y, theta);
-            let ex = x + l * theta.cos();
-            let ey = y + l * theta.sin();
-            let exit = (ex, ey, theta);
-            x = ex;
-            y = ey;
+            let entry = state;
+            let exit = ClothoidState {
+                x: state.x + l * state.theta.cos(),
+                y: state.y + l * state.theta.sin(),
+                theta: state.theta,
+            };
+            state = exit;
             segments.push(PathSegment {
                 kind: SegmentKind::Linear,
                 points: vec![entry, exit],
-                boundary_theta: theta,
+                boundary_theta: state.theta,
             });
         }
 
-        let pts = integrate_clothoid(x, y, theta, ks, ke, clen, n_steps);
-        if let Some(&(lx, ly, lt)) = pts.last() {
-            let cloth_pts: Vec<(f64, f64, f64)> = if pts.len() > 1 {
+        let pts = integrate_clothoid(state.x, state.y, state.theta, ks, ke, clen, n_steps);
+        if let Some(last) = pts.last() {
+            let cloth_pts: Vec<ClothoidState> = if pts.len() > 1 {
                 pts[1..].to_vec()
             } else {
                 pts.clone()
@@ -225,33 +292,33 @@ pub fn eval_path_segmented(
                 segments.push(PathSegment {
                     kind: SegmentKind::Curve,
                     points: cloth_pts,
-                    boundary_theta: lt,
+                    boundary_theta: last.theta,
                 });
             }
-            x = lx;
-            y = ly;
-            theta = lt;
+            state = *last;
         }
     }
 
     let l_final = params[4 * n_clothoids].max(0.0);
     if l_final > 1e-10 {
-        let entry = (x, y, theta);
-        let ex = x + l_final * theta.cos();
-        let ey = y + l_final * theta.sin();
-        let exit = (ex, ey, theta);
+        let entry = state;
+        let exit = ClothoidState {
+            x: state.x + l_final * state.theta.cos(),
+            y: state.y + l_final * state.theta.sin(),
+            theta: state.theta,
+        };
         segments.push(PathSegment {
             kind: SegmentKind::Linear,
             points: vec![entry, exit],
-            boundary_theta: theta,
+            boundary_theta: exit.theta,
         });
     }
 
     if segments.is_empty() {
         segments.push(PathSegment {
             kind: SegmentKind::Linear,
-            points: vec![(x, y, theta), (x, y, theta)],
-            boundary_theta: theta,
+            points: vec![state, state],
+            boundary_theta: state.theta,
         });
     }
 
@@ -295,7 +362,7 @@ pub fn compute_error(params: &[f64], n_clothoids: usize, start: &Pose, end: &Pos
         if clen < 0.0 {
             neg_penalty += 100.0 * clen * clen;
         }
-        if clen >= 0.0 && clen < 0.1 {
+        if (0.0..0.1).contains(&clen) {
             len_penalty += 10.0 * (0.1 - clen).powi(2);
         }
         total_length += l.max(0.0) + clen.max(0.0);
@@ -307,16 +374,21 @@ pub fn compute_error(params: &[f64], n_clothoids: usize, start: &Pose, end: &Pos
     total_length += l_final.max(0.0);
 
     let pts = eval_path(params, n_clothoids, start, 20);
-    let (xe, ye, te) = *pts.last().unwrap_or(&(start.x, start.y, start.angle));
+    let default = ClothoidState {
+        x: start.x,
+        y: start.y,
+        theta: start.angle,
+    };
+    let last = pts.last().unwrap_or(&default);
 
-    if xe.is_nan() || ye.is_nan() || te.is_nan() {
+    if last.x.is_nan() || last.y.is_nan() || last.theta.is_nan() {
         return 1e10;
     }
 
-    let dx = xe - end.x;
-    let dy = ye - end.y;
+    let dx = last.x - end.x;
+    let dy = last.y - end.y;
     let dist_sq = dx * dx + dy * dy;
-    let ad = angle_diff(te, end.angle);
+    let ad = angle_diff(last.theta, end.angle);
 
     10.0 * dist_sq + 5.0 * ad * ad + neg_penalty + len_penalty + 0.001 * total_length
 }
@@ -332,9 +404,14 @@ pub fn compute_end_errors(
     end: &Pose,
 ) -> (f64, f64) {
     let pts = eval_path(params, n_clothoids, start, 20);
-    let (xe, ye, te) = *pts.last().unwrap_or(&(start.x, start.y, start.angle));
-    let dist = ((xe - end.x).powi(2) + (ye - end.y).powi(2)).sqrt();
-    let ad = angle_diff(te, end.angle).abs();
+    let default = ClothoidState {
+        x: start.x,
+        y: start.y,
+        theta: start.angle,
+    };
+    let last = pts.last().unwrap_or(&default);
+    let dist = ((last.x - end.x).powi(2) + (last.y - end.y).powi(2)).sqrt();
+    let ad = angle_diff(last.theta, end.angle).abs();
     (dist, ad)
 }
 
@@ -429,11 +506,13 @@ pub fn nelder_mead(f: &dyn Fn(&[f64]) -> f64, x0: &[f64], max_iter: usize) -> Ve
                 simplex[worst] = contracted;
                 fvals[worst] = fc;
             } else {
+                #[allow(clippy::needless_range_loop)]
                 for i in 1..=n {
                     let idx = order[i];
                     for j in 0..n {
-                        simplex[idx][j] =
-                            simplex[best][j] + sigma * (simplex[idx][j] - simplex[best][j]);
+                        let val = simplex[idx][j];
+                        let best_val = simplex[best][j];
+                        simplex[idx][j] = best_val + sigma * (val - best_val);
                     }
                     fvals[idx] = sanitize(f(&simplex[idx]));
                 }
@@ -456,20 +535,32 @@ pub fn nelder_mead(f: &dyn Fn(&[f64]) -> f64, x0: &[f64], max_iter: usize) -> Ve
 
 /// A fast, deterministic linear congruential generator (LCG).
 ///
-/// Produces values in `[0, 1)` suitable for random initialisation of optimizer
-/// parameters.  Use a fixed seed for reproducibility.
+/// Uses the constants from Numerical Recipes (a = 6364136223846793005,
+/// c = 1442695040888963407) to produce values in `[0, 1)`.
+///
+/// Suitable for random initialization of optimizer parameters. Use a fixed
+/// seed for reproducibility (see [`DEFAULT_RNG_SEED`]).
 pub struct Lcg {
+    /// The internal state of the generator.
     state: u64,
 }
 
 impl Lcg {
     /// Creates a new [`Lcg`] with the given `seed`.
+    ///
+    /// # Arguments
+    ///
+    /// * `seed` — The initial state. Same seeds produce identical sequences.
     pub fn new(seed: u64) -> Self {
         Self { state: seed }
     }
 
     /// Advances the generator and returns the next value in `[0, 1)`.
-    pub fn next(&mut self) -> f64 {
+    ///
+    /// # Returns
+    ///
+    /// A floating-point value `v` where `0.0 ≤ v < 1.0`.
+    pub fn next_val(&mut self) -> f64 {
         self.state = self
             .state
             .wrapping_mul(6_364_136_223_846_793_005)
@@ -494,19 +585,47 @@ mod tests {
     /// Zero curvature, θ=0: state should advance purely in +x.
     #[test]
     fn rk4_step_straight_x() {
-        let (nx, ny, nt) = rk4_step(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0);
-        assert!((nx - 1.0).abs() < 1e-10, "x should advance by step h=1");
-        assert!(ny.abs() < 1e-10, "y should not change");
-        assert!(nt.abs() < 1e-10, "θ should not change");
+        let result = rk4_step(
+            ClothoidState {
+                x: 0.0,
+                y: 0.0,
+                theta: 0.0,
+            },
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        );
+        assert!(
+            (result.x - 1.0).abs() < 1e-10,
+            "x should advance by step h=1"
+        );
+        assert!(result.y.abs() < 1e-10, "y should not change");
+        assert!(result.theta.abs() < 1e-10, "θ should not change");
     }
 
     /// Zero curvature, θ=π/2: state should advance purely in +y.
     #[test]
     fn rk4_step_straight_y() {
-        let (nx, ny, nt) = rk4_step(0.0, 0.0, PI / 2.0, 0.0, 0.0, 1.0, 0.0, 1.0);
-        assert!(nx.abs() < 1e-10, "x should not change");
-        assert!((ny - 1.0).abs() < 1e-10, "y should advance by h=1");
-        assert!((nt - PI / 2.0).abs() < 1e-10, "θ should not change");
+        let result = rk4_step(
+            ClothoidState {
+                x: 0.0,
+                y: 0.0,
+                theta: PI / 2.0,
+            },
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+        );
+        assert!(result.x.abs() < 1e-10, "x should not change");
+        assert!((result.y - 1.0).abs() < 1e-10, "y should advance by h=1");
+        assert!(
+            (result.theta - PI / 2.0).abs() < 1e-10,
+            "θ should not change"
+        );
     }
 
     /// Non-zero constant curvature: θ changes by κ·h.
@@ -514,19 +633,39 @@ mod tests {
     fn rk4_step_constant_curvature_angle() {
         let kappa = 1.0;
         let h = 0.1;
-        // With constant κ=1 (ks=ke=1), angle change ≈ κ·h for small h.
-        let (_, _, nt) = rk4_step(0.0, 0.0, 0.0, kappa, kappa, 1.0, 0.0, h);
-        // For constant κ the exact θ change is κ·h (straight-forward integration)
-        assert!((nt - kappa * h).abs() < 1e-6);
+        let result = rk4_step(
+            ClothoidState {
+                x: 0.0,
+                y: 0.0,
+                theta: 0.0,
+            },
+            kappa,
+            kappa,
+            1.0,
+            0.0,
+            h,
+        );
+        assert!((result.theta - kappa * h).abs() < 1e-6);
     }
 
     /// Step from a non-origin position with θ=0 advances x by h.
     #[test]
     fn rk4_step_non_origin_start() {
-        let (nx, ny, nt) = rk4_step(3.0, -2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0);
-        assert!((nx - 5.0).abs() < 1e-10);
-        assert!((ny + 2.0).abs() < 1e-10);
-        assert!(nt.abs() < 1e-10);
+        let result = rk4_step(
+            ClothoidState {
+                x: 3.0,
+                y: -2.0,
+                theta: 0.0,
+            },
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            2.0,
+        );
+        assert!((result.x - 5.0).abs() < 1e-10);
+        assert!((result.y + 2.0).abs() < 1e-10);
+        assert!(result.theta.abs() < 1e-10);
     }
 
     // ------------------------------------------------------------------
@@ -538,10 +677,9 @@ mod tests {
     fn integrate_clothoid_zero_length() {
         let pts = integrate_clothoid(1.0, 2.0, 0.5, 1.0, -1.0, 0.0, 100);
         assert_eq!(pts.len(), 1);
-        let (x, y, theta) = pts[0];
-        assert_eq!(x, 1.0);
-        assert_eq!(y, 2.0);
-        assert_eq!(theta, 0.5);
+        assert_eq!(pts[0].x, 1.0);
+        assert_eq!(pts[0].y, 2.0);
+        assert_eq!(pts[0].theta, 0.5);
     }
 
     /// n_steps=0 returns only the start state even if length > 0.
@@ -556,10 +694,10 @@ mod tests {
     fn integrate_clothoid_straight_line_x() {
         let length = 5.0;
         let pts = integrate_clothoid(0.0, 0.0, 0.0, 0.0, 0.0, length, 200);
-        let &(x, y, theta) = pts.last().unwrap();
-        assert!((x - length).abs() < 1e-6, "x should equal arc length");
-        assert!(y.abs() < 1e-6, "y should be zero");
-        assert!(theta.abs() < 1e-6, "heading should be unchanged");
+        let last = pts.last().unwrap();
+        assert!((last.x - length).abs() < 1e-6, "x should equal arc length");
+        assert!(last.y.abs() < 1e-6, "y should be zero");
+        assert!(last.theta.abs() < 1e-6, "heading should be unchanged");
     }
 
     /// Zero curvature, θ=π/2: should trace a straight line in +y.
@@ -567,10 +705,10 @@ mod tests {
     fn integrate_clothoid_straight_line_y() {
         let length = 3.0;
         let pts = integrate_clothoid(0.0, 0.0, PI / 2.0, 0.0, 0.0, length, 200);
-        let &(x, y, theta) = pts.last().unwrap();
-        assert!(x.abs() < 1e-6);
-        assert!((y - length).abs() < 1e-6);
-        assert!((theta - PI / 2.0).abs() < 1e-6);
+        let last = pts.last().unwrap();
+        assert!(last.x.abs() < 1e-6);
+        assert!((last.y - length).abs() < 1e-6);
+        assert!((last.theta - PI / 2.0).abs() < 1e-6);
     }
 
     /// Constant curvature κ=1, arc=π: heading should change by π.
@@ -579,21 +717,26 @@ mod tests {
         let kappa = 1.0;
         let arc = PI;
         let pts = integrate_clothoid(0.0, 0.0, 0.0, kappa, kappa, arc, 1000);
-        let &(_, _, theta) = pts.last().unwrap();
-        // θ should change by κ * arc = π
-        assert!((theta - PI).abs() < 1e-3, "heading should rotate by π rad");
+        let last = pts.last().unwrap();
+        assert!(
+            (last.theta - PI).abs() < 1e-3,
+            "heading should rotate by π rad"
+        );
     }
 
     /// Constant curvature κ=1, arc=π: traces a half-circle of radius 1.
     /// Starting at (0,0) heading +x, the centre is at (0,1) and the endpoint is (0,2).
     #[test]
     fn integrate_clothoid_half_circle_position() {
-        let kappa = 1.0; // radius = 1
-        let arc = PI; // half circle
+        let kappa = 1.0;
+        let arc = PI;
         let pts = integrate_clothoid(0.0, 0.0, 0.0, kappa, kappa, arc, 2000);
-        let &(x, y, _) = pts.last().unwrap();
-        assert!(x.abs() < 1e-3, "x should return to ~0 after half circle");
-        assert!((y - 2.0).abs() < 1e-3, "y should be 2*radius = 2");
+        let last = pts.last().unwrap();
+        assert!(
+            last.x.abs() < 1e-3,
+            "x should return to ~0 after half circle"
+        );
+        assert!((last.y - 2.0).abs() < 1e-3, "y should be 2*radius = 2");
     }
 
     /// Constant curvature κ=1, arc=2π: full circle — should return to near (0,0)
@@ -603,11 +746,10 @@ mod tests {
         let kappa = 1.0;
         let arc = 2.0 * PI;
         let pts = integrate_clothoid(0.0, 0.0, 0.0, kappa, kappa, arc, 4000);
-        let &(x, y, theta) = pts.last().unwrap();
-        assert!(x.abs() < 1e-2, "x should return near 0");
-        assert!(y.abs() < 1e-2, "y should return near 0");
-        // θ should be ≈ 2π (i.e. one full rotation)
-        assert!((theta - 2.0 * PI).abs() < 1e-2);
+        let last = pts.last().unwrap();
+        assert!(last.x.abs() < 1e-2, "x should return near 0");
+        assert!(last.y.abs() < 1e-2, "y should return near 0");
+        assert!((last.theta - 2.0 * PI).abs() < 1e-2);
     }
 
     /// Linearly varying curvature (clothoid spiral): heading change = integral of κ(s) ds
@@ -617,11 +759,10 @@ mod tests {
         let ks = 0.0;
         let ke = 2.0;
         let length = 1.0;
-        // Expected total angle change = ∫₀¹ (0 + 2t) dt = [t²]₀¹ = 1.0 rad
         let pts = integrate_clothoid(0.0, 0.0, 0.0, ks, ke, length, 1000);
-        let &(_, _, theta) = pts.last().unwrap();
-        let expected = (ks + ke) / 2.0 * length; // = 1.0
-        assert!((theta - expected).abs() < 1e-4);
+        let last = pts.last().unwrap();
+        let expected = (ks + ke) / 2.0 * length;
+        assert!((last.theta - expected).abs() < 1e-4);
     }
 
     /// Returned vector has n_steps+1 elements when length > 0 and n_steps > 0.
@@ -639,38 +780,35 @@ mod tests {
     /// Single clothoid with zero curvature: straight line from start.
     #[test]
     fn eval_path_single_clothoid_straight() {
-        // params: [l=0, ks=0, ke=0, clen=5, l_final=0]
         let start = Pose::new(0.0, 0.0, 0.0);
         let params = [0.0, 0.0, 0.0, 5.0, 0.0];
         let pts = eval_path(&params, 1, &start, 100);
-        let &(x, y, theta) = pts.last().unwrap();
-        assert!((x - 5.0).abs() < 1e-6);
-        assert!(y.abs() < 1e-6);
-        assert!(theta.abs() < 1e-6);
+        let last = pts.last().unwrap();
+        assert!((last.x - 5.0).abs() < 1e-6);
+        assert!(last.y.abs() < 1e-6);
+        assert!(last.theta.abs() < 1e-6);
     }
 
     /// Initial straight segment + zero-curvature clothoid: total length is sum.
     #[test]
     fn eval_path_initial_straight_plus_clothoid() {
-        // params: [l=2, ks=0, ke=0, clen=3, l_final=0] — total 5 in +x
         let start = Pose::new(0.0, 0.0, 0.0);
         let params = [2.0, 0.0, 0.0, 3.0, 0.0];
         let pts = eval_path(&params, 1, &start, 100);
-        let &(x, y, _) = pts.last().unwrap();
-        assert!((x - 5.0).abs() < 1e-6);
-        assert!(y.abs() < 1e-6);
+        let last = pts.last().unwrap();
+        assert!((last.x - 5.0).abs() < 1e-6);
+        assert!(last.y.abs() < 1e-6);
     }
 
     /// Final trailing straight segment advances position.
     #[test]
     fn eval_path_trailing_straight() {
-        // params: [l=0, ks=0, ke=0, clen=2, l_final=3] — total 5 in +x
         let start = Pose::new(0.0, 0.0, 0.0);
         let params = [0.0, 0.0, 0.0, 2.0, 3.0];
         let pts = eval_path(&params, 1, &start, 100);
-        let &(x, y, _) = pts.last().unwrap();
-        assert!((x - 5.0).abs() < 1e-6);
-        assert!(y.abs() < 1e-6);
+        let last = pts.last().unwrap();
+        assert!((last.x - 5.0).abs() < 1e-6);
+        assert!(last.y.abs() < 1e-6);
     }
 
     /// Non-origin start pose: position offset is respected.
@@ -679,34 +817,31 @@ mod tests {
         let start = Pose::new(1.0, 2.0, 0.0);
         let params = [0.0, 0.0, 0.0, 3.0, 0.0];
         let pts = eval_path(&params, 1, &start, 100);
-        let &(x, y, _) = pts.last().unwrap();
-        assert!((x - 4.0).abs() < 1e-6);
-        assert!((y - 2.0).abs() < 1e-6);
+        let last = pts.last().unwrap();
+        assert!((last.x - 4.0).abs() < 1e-6);
+        assert!((last.y - 2.0).abs() < 1e-6);
     }
 
     /// Two clothoid segments, both zero-curvature: lengths add up correctly.
     #[test]
-    fn eval_path_two_clothoids_straight() {
-        // params: [l=0, ks=0, ke=0, clen=2, l=0, ks=0, ke=0, clen=3, l_final=0]
+    fn eval_pathtwo_clothoids_straight() {
         let start = Pose::new(0.0, 0.0, 0.0);
         let params = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0];
         let pts = eval_path(&params, 2, &start, 100);
-        let &(x, y, _) = pts.last().unwrap();
-        assert!((x - 5.0).abs() < 1e-6);
-        assert!(y.abs() < 1e-6);
+        let last = pts.last().unwrap();
+        assert!((last.x - 5.0).abs() < 1e-6);
+        assert!(last.y.abs() < 1e-6);
     }
 
     /// Negative lengths are clamped to zero.
     #[test]
     fn eval_path_negative_lengths_clamped() {
         let start = Pose::new(0.0, 0.0, 0.0);
-        // Negative l is clamped to 0, negative clen is clamped to 1e-6 (near zero)
         let params = [-1.0, 0.0, 0.0, 3.0, -0.5];
         let pts = eval_path(&params, 1, &start, 50);
-        // The clothoid should still integrate for ~3 units; final negative straight ignored
-        let &(x, y, _) = pts.last().unwrap();
-        assert!((x - 3.0).abs() < 1e-5);
-        assert!(y.abs() < 1e-5);
+        let last = pts.last().unwrap();
+        assert!((last.x - 3.0).abs() < 1e-5);
+        assert!(last.y.abs() < 1e-5);
     }
 
     // ------------------------------------------------------------------
@@ -721,9 +856,9 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].kind, SegmentKind::Curve);
         assert!(segs[0].points.len() >= 2);
-        let &(x, y, _) = segs[0].points.last().unwrap();
-        assert!((x - 5.0).abs() < 1e-6);
-        assert!(y.abs() < 1e-6);
+        let last = segs[0].points.last().unwrap();
+        assert!((last.x - 5.0).abs() < 1e-6);
+        assert!(last.y.abs() < 1e-6);
     }
 
     #[test]
@@ -745,10 +880,10 @@ mod tests {
         assert_eq!(segs[0].kind, SegmentKind::Linear);
         assert_eq!(segs[1].kind, SegmentKind::Curve);
         let lin_end = segs[0].points.last().unwrap();
-        assert!((lin_end.0 - 2.0).abs() < 1e-10);
-        assert!(lin_end.1.abs() < 1e-10);
+        assert!((lin_end.x - 2.0).abs() < 1e-10);
+        assert!(lin_end.y.abs() < 1e-10);
         let cur_start = segs[1].points.first().unwrap();
-        assert!((cur_start.0 - 2.0).abs() < 0.1);
+        assert!((cur_start.x - 2.0).abs() < 0.1);
     }
 
     #[test]
@@ -759,8 +894,8 @@ mod tests {
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0].kind, SegmentKind::Curve);
         assert_eq!(segs[1].kind, SegmentKind::Linear);
-        let (_, _, theta) = segs[1].points.last().unwrap();
-        assert_eq!(segs[1].boundary_theta, *theta);
+        let last = segs[1].points.last().unwrap();
+        assert_eq!(segs[1].boundary_theta, last.theta);
     }
 
     #[test]
@@ -772,7 +907,7 @@ mod tests {
         assert!((segs[0].boundary_theta - 0.0).abs() < 1e-10);
         let last_seg = segs.last().unwrap();
         let last_pt = last_seg.points.last().unwrap();
-        assert!((last_seg.boundary_theta - last_pt.2).abs() < 1e-10);
+        assert!((last_seg.boundary_theta - last_pt.theta).abs() < 1e-10);
     }
 
     // ------------------------------------------------------------------
@@ -939,7 +1074,7 @@ mod tests {
         let mut a = Lcg::new(DEFAULT_RNG_SEED);
         let mut b = Lcg::new(DEFAULT_RNG_SEED);
         for _ in 0..200 {
-            assert_eq!(a.next().to_bits(), b.next().to_bits());
+            assert_eq!(a.next_val().to_bits(), b.next_val().to_bits());
         }
     }
 
@@ -948,7 +1083,7 @@ mod tests {
     fn lcg_range() {
         let mut lcg = Lcg::new(12345);
         for _ in 0..10_000 {
-            let v = lcg.next();
+            let v = lcg.next_val();
             assert!(v >= 0.0, "value {v} is negative");
             assert!(v < 1.0, "value {v} is ≥ 1.0");
         }
@@ -959,8 +1094,8 @@ mod tests {
     fn lcg_different_seeds() {
         let mut a = Lcg::new(1);
         let mut b = Lcg::new(2);
-        let seq_a: Vec<u64> = (0..10).map(|_| a.next().to_bits()).collect();
-        let seq_b: Vec<u64> = (0..10).map(|_| b.next().to_bits()).collect();
+        let seq_a: Vec<u64> = (0..10).map(|_| a.next_val().to_bits()).collect();
+        let seq_b: Vec<u64> = (0..10).map(|_| b.next_val().to_bits()).collect();
         assert_ne!(seq_a, seq_b);
     }
 

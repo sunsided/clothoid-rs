@@ -1,34 +1,108 @@
+//! # clothoid
+//!
+//! A Rust library for computing and fitting **Clothoids** (also known as
+//! **Euler spirals** or **Cornu spirals**). A clothoid is a curve whose
+//! curvature changes linearly with its arc length.
+//!
+//! ## Usage
+//!
+//! ```
+//! use clothoid::Clothoid;
+//!
+//! let clothoid = Clothoid::new(1.0);
+//! let angle = clothoid.direction_angle(0.5);
+//! ```
+//!
+//! ## Features
+//!
+//! - `fresnel` — enables high-precision Fresnel integral computation via the
+//!   external `fresnel` crate. When disabled, uses an approximation based on
+//!   auxiliary functions (Wilde 2009 / Abramowitz & Stegun).
+
 pub mod fit;
 pub mod optimizer;
 
-/// The square root of π.
+/// The square root of π (`√π ≈ 1.77245`).
+///
+/// Used in the scaling of Fresnel integral computations.
+#[allow(dead_code)]
 const PI_SQRT: f64 = 1.7724538509055160272981674833411451827975494561223871282138077898f64;
 
-/// The inverse of the square root of π, i.e. `1.0 / PI_SQRT` (see [`PI_SQRT`]).
+/// The inverse of the square root of π (`1/√π ≈ 0.56419`).
+///
+/// Used to normalize arguments before passing them to Fresnel integral
+/// computations (see [`PI_SQRT`]).
+#[allow(dead_code)]
 const INV_PI_SQRT: f64 = 0.5641895835477562869480794515607725858440506293289988568440857217f64;
 
+/// A point in 2D Cartesian space.
+///
+/// Stores `x` and `y` coordinates as 64-bit floating-point values.
 #[derive(Debug, Default, Copy, Clone, PartialOrd, PartialEq)]
 pub struct Point2 {
+    /// The x-coordinate.
     pub x: f64,
+    /// The y-coordinate.
     pub y: f64,
 }
 
+/// A Clothoid (Euler spiral) curve.
+///
+/// A clothoid is a curve whose curvature changes linearly with its arc length.
+/// This type provides methods to compute points on the spiral using Fresnel
+/// integrals, either via the optional `fresnel` crate (high precision) or an
+/// built-in approximation.
+///
+/// The scaling factor `a` determines the "tightness" of the spiral: larger
+/// values produce gentler curves.
 pub struct Clothoid {
     /// The scaling factor of the clothoid.
+    ///
+    /// Controls the rate at which curvature changes with arc length.
     a: f64,
 }
 
 impl Clothoid {
+    /// Creates a new [`Clothoid`] with the given scaling factor `a`.
+    ///
+    /// # Arguments
+    ///
+    /// * `a` — The scaling factor. Larger values produce gentler curves.
     pub fn new(a: f64) -> Self {
         Self { a }
     }
 
+    /// Computes the direction angle at a given arc length along the clothoid.
+    ///
+    /// The direction angle is given by `θ(s) = s² / (2a²)`, where `s` is the
+    /// arc length and `a` is the scaling factor.
+    ///
+    /// # Arguments
+    ///
+    /// * `arc_length` — The arc length `s` along the clothoid.
+    ///
+    /// # Returns
+    ///
+    /// The direction angle in radians.
     #[inline]
     pub fn direction_angle(&self, arc_length: f64) -> f64 {
         0.5 * (arc_length * arc_length) / (self.a * self.a)
     }
 
+    /// Computes a point on the clothoid at parameter `t`.
+    ///
+    /// Dispatches to either the high-precision `fresnel` crate implementation
+    /// (when the `fresnel` feature is enabled) or the built-in approximation.
+    ///
+    /// # Arguments
+    ///
+    /// * `t` — The parameter value (proportional to arc length).
+    ///
+    /// # Returns
+    ///
+    /// A [`Point2`] on the clothoid curve.
     #[inline(always)]
+    #[allow(dead_code)]
     fn calculate(&self, t: f64) -> Point2 {
         #[cfg(feature = "fresnel")]
         {
@@ -41,6 +115,18 @@ impl Clothoid {
         }
     }
 
+    /// Computes a point on the clothoid using the external `fresnel` crate.
+    ///
+    /// This method provides high-precision Fresnel integral computation.
+    /// Only available when the `fresnel` feature is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `t` — The parameter value.
+    ///
+    /// # Returns
+    ///
+    /// A [`Point2`] on the clothoid curve.
     #[cfg(feature = "fresnel")]
     fn calculate_fresnl(&self, t: f64) -> Point2 {
         let (s, c) = fresnel::fresnl(t * INV_PI_SQRT);
@@ -50,6 +136,19 @@ impl Clothoid {
         }
     }
 
+    /// Computes a point on the clothoid using the built-in approximation.
+    ///
+    /// Uses auxiliary functions `f(x)` and `g(x)` to approximate the Fresnel
+    /// integrals (see [`AuxFg::compute`]).
+    ///
+    /// # Arguments
+    ///
+    /// * `t` — The parameter value.
+    ///
+    /// # Returns
+    ///
+    /// A [`Point2`] on the clothoid curve.
+    #[allow(dead_code)]
     fn calculate_approx(&self, t: f64) -> Point2 {
         let fsc = FresnelSinCos::compute(t * INV_PI_SQRT);
         Point2 {
@@ -59,23 +158,49 @@ impl Clothoid {
     }
 }
 
-/// Auxiliary functions `f(x)` and `g(x)` for calculating the
-/// Fresnel sines and cosines, `S(x)` and `C(x)`.
+/// Auxiliary functions `f(x)` and `g(x)` for computing Fresnel integrals.
+///
+/// These functions are used in the approximation of the Fresnel sine and
+/// cosine integrals `S(x)` and `C(x)`.
+///
+/// ## Sources
+///
+/// Doran K. Wilde, "Computing Clothoid Segments for Trajectory Generation".
+/// IEEE/RSJ International Conference on Intelligent Robots and Systems, October 2009.
+///
+/// Abramowitz, Milton and Stegun, Irene A., (Editors), "Handbook of Mathematical
+/// Functions with Formulas, Graphs, and Mathematical Tables".
+/// National Bureau of Standards Applied Mathematics Series, No. 55, June 1964, pp. 295-303.
+#[allow(dead_code)]
 struct AuxFg {
+    /// The value of the auxiliary function `f(x)`.
     pub f: f64,
+    /// The value of the auxiliary function `g(x)`.
     pub g: f64,
 }
 
 impl AuxFg {
-    /// Calculates the auxiliary functions `f` and `g` for the Fresnel integrals.
+    /// Computes the auxiliary functions `f(x)` and `g(x)` for a given input.
+    ///
+    /// Uses rational polynomial approximations from Abramowitz & Stegun.
     ///
     /// ## Sources
+    ///
     /// Doran K. Wilde, "Computing Clothoid Segments for Trajectory Generation".
     /// IEEE/RSJ International Conference on Intelligent Robots and Systems, October 2009.
     ///
     /// Abramowitz, Milton and Stegun, Irene A., (Editors), "Handbook of Mathematical
     /// Functions with Formulas, Graphs, and Mathematical Tables".
     /// National Bureau of Standards Applied Mathematics Series, No. 55, June 1964, pp. 295-303.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` — The input value (typically normalized by `1/√π`).
+    ///
+    /// # Returns
+    ///
+    /// An [`AuxFg`] containing the computed `f` and `g` values.
+    #[allow(dead_code)]
     pub fn compute(x: f64) -> Self {
         let x2 = x * x;
         let x3 = x * x * x;
@@ -87,17 +212,35 @@ impl AuxFg {
     }
 }
 
-/// Fresnel sines and cosines, S(x) and C(x).
+/// Fresnel sine and cosine integral values `S(x)` and `C(x)`.
+///
+/// These integrals are fundamental to computing points on a clothoid curve:
+/// - `S(x) = ∫₀ˣ sin(πt²/2) dt`
+/// - `C(x) = ∫₀ˣ cos(πt²/2) dt`
+#[allow(dead_code)]
 struct FresnelSinCos {
-    /// C(x)
+    /// The Fresnel cosine integral `C(x)`.
     pub cos: f64,
-    /// S(x)
+    /// The Fresnel sine integral `S(x)`.
     pub sin: f64,
 }
 
 impl FresnelSinCos {
-    /// Calculates the Fresnel sines and cosines, `S(x)` and `C(x)`
-    /// by means of the auxiliary functions f(x)` and `g(x)` (see [`AuxFg::compute`]).
+    /// Computes the Fresnel sine and cosine integrals `S(x)` and `C(x)`.
+    ///
+    /// Uses the auxiliary functions `f(x)` and `g(x)` (see [`AuxFg::compute`])
+    /// to approximate the integrals via:
+    /// - `C(x) = 0.5 + f(x)·sin(πx²/2) - g(x)·cos(πx²/2)`
+    /// - `S(x) = 0.5 - f(x)·cos(πx²/2) - g(x)·sin(πx²/2)`
+    ///
+    /// # Arguments
+    ///
+    /// * `x` — The input value (typically normalized by `1/√π`).
+    ///
+    /// # Returns
+    ///
+    /// A [`FresnelSinCos`] containing the computed `sin` and `cos` values.
+    #[allow(dead_code)]
     pub fn compute(x: f64) -> Self {
         let aux = AuxFg::compute(x);
         let (sin, cos) = (x * x * std::f64::consts::FRAC_PI_2).sin_cos();
@@ -130,6 +273,15 @@ mod tests {
         let pt = clothoid.calculate_approx(std::f64::consts::PI);
         assert!((pt.x - 6.77).abs() < 0.01);
         assert!((pt.y - 4.59).abs() < 0.01);
+    }
+
+    #[test]
+    fn clothoid_state_defaults() {
+        use crate::optimizer::ClothoidState;
+        let state = ClothoidState::default();
+        assert_eq!(state.x, 0.0);
+        assert_eq!(state.y, 0.0);
+        assert_eq!(state.theta, 0.0);
     }
 
     #[test]
