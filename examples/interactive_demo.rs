@@ -6,11 +6,12 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use clothoid::optimizer::{
-    compute_end_errors, compute_error, eval_path, nelder_mead, Lcg, Pose, DEFAULT_RNG_SEED,
+    compute_end_errors, compute_error, eval_path_segmented, nelder_mead, Lcg, Pose, SegmentKind,
+    DEFAULT_RNG_SEED,
 };
 use softbuffer::{Context, Surface};
 use tiny_skia::{
-    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform,
+    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -23,13 +24,20 @@ use winit::window::{Window, WindowId};
 // ============================================================================
 
 #[derive(Clone)]
+struct RenderSegment {
+    kind: SegmentKind,
+    points: Vec<(f32, f32)>,
+    boundary_theta: f32,
+}
+
+#[derive(Clone)]
 struct PathFit {
     params: Vec<f64>,
     n_clothoids: usize,
     total_error: f64,
     pos_error: f64,
     angle_error: f64,
-    points: Vec<(f32, f32)>,
+    segments: Vec<RenderSegment>,
 }
 
 struct SharedState {
@@ -49,8 +57,16 @@ struct SharedState {
 impl SharedState {
     fn new() -> Self {
         Self {
-            start: Pose { x: -3.0, y: 0.0, angle: 0.0 },
-            end: Pose { x: 3.0, y: 0.0, angle: 0.0 },
+            start: Pose {
+                x: -3.0,
+                y: 0.0,
+                angle: 0.0,
+            },
+            end: Pose {
+                x: 3.0,
+                y: 0.0,
+                angle: 0.0,
+            },
             generation: 0,
             best_fit: None,
             exploration: None,
@@ -128,18 +144,23 @@ fn run_optimizer(shared: Arc<Mutex<SharedState>>) {
 
         let start_c = start.clone();
         let end_c = end.clone();
-        let params = nelder_mead(
-            &|p: &[f64]| compute_error(p, n, &start_c, &end_c),
-            &x0,
-            500,
-        );
+        let params = nelder_mead(&|p: &[f64]| compute_error(p, n, &start_c, &end_c), &x0, 500);
 
         let total_err = compute_error(&params, n, &start, &end);
         let (pos_err, angle_err) = compute_end_errors(&params, n, &start, &end);
 
-        let render_pts: Vec<(f32, f32)> = eval_path(&params, n, &start, 100)
-            .iter()
-            .map(|&(x, y, _)| (x as f32, y as f32))
+        let path_segs = eval_path_segmented(&params, n, &start, 40);
+        let render_segs: Vec<RenderSegment> = path_segs
+            .into_iter()
+            .map(|s| RenderSegment {
+                kind: s.kind,
+                points: s
+                    .points
+                    .iter()
+                    .map(|&(x, y, _)| (x as f32, y as f32))
+                    .collect(),
+                boundary_theta: s.boundary_theta as f32,
+            })
             .collect();
 
         let fit = PathFit {
@@ -148,7 +169,7 @@ fn run_optimizer(shared: Arc<Mutex<SharedState>>) {
             total_error: total_err,
             pos_error: pos_err,
             angle_error: angle_err,
-            points: render_pts,
+            segments: render_segs,
         };
 
         {
@@ -177,7 +198,11 @@ fn run_optimizer(shared: Arc<Mutex<SharedState>>) {
         restart_count += 1;
         if restart_count >= 200 {
             restart_count = 0;
-            n_clothoids = if n_clothoids >= max_seg { 1 } else { n_clothoids + 1 };
+            n_clothoids = if n_clothoids >= max_seg {
+                1
+            } else {
+                n_clothoids + 1
+            };
         }
 
         std::thread::sleep(std::time::Duration::from_micros(100));
@@ -196,7 +221,11 @@ struct Camera {
 
 impl Camera {
     fn new() -> Self {
-        Self { pan_x: 0.0, pan_y: 0.0, zoom: 80.0 }
+        Self {
+            pan_x: 0.0,
+            pan_y: 0.0,
+            zoom: 80.0,
+        }
     }
 
     fn world_to_screen(&self, wx: f64, wy: f64, w: f32, h: f32) -> (f32, f32) {
@@ -239,15 +268,7 @@ fn fill_rect_solid(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, color: C
     }
 }
 
-fn draw_line(
-    pixmap: &mut Pixmap,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-    color: Color,
-    width: f32,
-) {
+fn draw_line(pixmap: &mut Pixmap, x0: f32, y0: f32, x1: f32, y1: f32, color: Color, width: f32) {
     let mut pb = PathBuilder::new();
     pb.move_to(x0, y0);
     pb.line_to(x1, y1);
@@ -291,7 +312,13 @@ fn draw_filled_triangle(
         let mut paint = Paint::default();
         paint.set_color(color);
         paint.anti_alias = true;
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -317,40 +344,87 @@ fn draw_gizmo(pixmap: &mut Pixmap, pose: &Pose, color: Color, camera: &Camera) {
     let lft_y = fwd_x;
 
     let tip = (tx, ty);
-    let bl = (tx - head_len * fwd_x + head_w * lft_x, ty - head_len * fwd_y + head_w * lft_y);
-    let br = (tx - head_len * fwd_x - head_w * lft_x, ty - head_len * fwd_y - head_w * lft_y);
+    let bl = (
+        tx - head_len * fwd_x + head_w * lft_x,
+        ty - head_len * fwd_y + head_w * lft_y,
+    );
+    let br = (
+        tx - head_len * fwd_x - head_w * lft_x,
+        ty - head_len * fwd_y - head_w * lft_y,
+    );
     draw_filled_triangle(pixmap, tip, bl, br, color);
 }
 
-fn draw_world_path(
+fn segment_color(base: Color, idx: usize) -> Color {
+    let shift = (idx as f32 * 0.7).sin() * 0.1;
+
+    let nr = (base.red() + shift).clamp(0.0, 1.0);
+    let ng = (base.green() - shift * 0.6).clamp(0.0, 1.0);
+    let nb = (base.blue() + shift * 0.4).clamp(0.0, 1.0);
+
+    Color::from_rgba(nr, ng, nb, base.alpha()).unwrap_or(base)
+}
+
+fn draw_world_segments(
     pixmap: &mut Pixmap,
-    pts: &[(f32, f32)],
+    segments: &[RenderSegment],
     color: Color,
     width: f32,
     camera: &Camera,
 ) {
-    if pts.len() < 2 {
+    if segments.is_empty() {
         return;
     }
     let w = pixmap.width() as f32;
     let h = pixmap.height() as f32;
 
-    let mut pb = PathBuilder::new();
-    let (sx, sy) = camera.world_to_screen(pts[0].0 as f64, pts[0].1 as f64, w, h);
-    pb.move_to(sx, sy);
-    for &(wx, wy) in &pts[1..] {
-        let (sx, sy) = camera.world_to_screen(wx as f64, wy as f64, w, h);
-        pb.line_to(sx, sy);
+    let dash_intervals = vec![width * 2.0, width * 3.0];
+
+    for (idx, seg) in segments.iter().enumerate() {
+        if seg.points.len() < 2 {
+            continue;
+        }
+        let seg_color = segment_color(color, idx);
+        let mut pb = PathBuilder::new();
+        let (sx, sy) = camera.world_to_screen(seg.points[0].0 as f64, seg.points[0].1 as f64, w, h);
+        pb.move_to(sx, sy);
+        for &(wx, wy) in &seg.points[1..] {
+            let (sx, sy) = camera.world_to_screen(wx as f64, wy as f64, w, h);
+            pb.line_to(sx, sy);
+        }
+        if let Some(path) = pb.finish() {
+            let mut paint = Paint::default();
+            paint.set_color(seg_color);
+            paint.anti_alias = true;
+            let mut stroke = Stroke::default();
+            stroke.width = width;
+            stroke.line_cap = LineCap::Round;
+            stroke.line_join = LineJoin::Round;
+            if seg.kind == SegmentKind::Linear {
+                stroke.dash = StrokeDash::new(dash_intervals.clone(), 0.0);
+            }
+            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        }
     }
-    if let Some(path) = pb.finish() {
-        let mut paint = Paint::default();
-        paint.set_color(color);
-        paint.anti_alias = true;
-        let mut stroke = Stroke::default();
-        stroke.width = width;
-        stroke.line_cap = LineCap::Round;
-        stroke.line_join = LineJoin::Round;
-        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+
+    let tick_width = 1.0f32;
+    let tick_half_len = 4.0f32;
+    for i in 0..segments.len() - 1 {
+        let seg = &segments[i];
+        if seg.points.is_empty() {
+            continue;
+        }
+        let tick_c = segment_color(color, i);
+        let (lx, ly) = seg.points.last().unwrap();
+        let theta = seg.boundary_theta;
+        let (sx, sy) = camera.world_to_screen(*lx as f64, *ly as f64, w, h);
+        let perp_x = -theta.sin();
+        let perp_y = theta.cos();
+        let x0 = sx - tick_half_len * perp_x;
+        let y0 = sy - tick_half_len * perp_y;
+        let x1 = sx + tick_half_len * perp_x;
+        let y1 = sy + tick_half_len * perp_y;
+        draw_line(pixmap, x0, y0, x1, y1, tick_c, tick_width);
     }
 }
 
@@ -408,7 +482,14 @@ fn draw_hud(pixmap: &mut Pixmap, state: &SharedState) {
     let bar_y = h - 55.0;
     let bar_w = 120.0f32;
     let bar_h = 8.0f32;
-    fill_rect_solid(pixmap, bar_x, bar_y, bar_w, bar_h, Color::from_rgba8(40, 40, 40, 255));
+    fill_rect_solid(
+        pixmap,
+        bar_x,
+        bar_y,
+        bar_w,
+        bar_h,
+        Color::from_rgba8(40, 40, 40, 255),
+    );
     let frac = ((state.max_kappa - 0.05) / (20.0 - 0.05)).clamp(0.0, 1.0) as f32;
     fill_rect_solid(
         pixmap,
@@ -429,7 +510,14 @@ fn draw_hud(pixmap: &mut Pixmap, state: &SharedState) {
 
     // Paused indicator
     if state.paused {
-        fill_rect_solid(pixmap, w - 35.0, 45.0, 25.0, 25.0, Color::from_rgba8(200, 50, 50, 255));
+        fill_rect_solid(
+            pixmap,
+            w - 35.0,
+            45.0,
+            25.0,
+            25.0,
+            Color::from_rgba8(200, 50, 50, 255),
+        );
     }
 }
 
@@ -487,18 +575,18 @@ impl App {
         let state = self.shared.lock().unwrap();
 
         if let Some(ref expl) = state.exploration {
-            draw_world_path(
+            draw_world_segments(
                 &mut pixmap,
-                &expl.points,
+                &expl.segments,
                 Color::from_rgba8(50, 80, 180, 128),
                 1.5,
                 &self.camera,
             );
         }
         if let Some(ref best) = state.best_fit {
-            draw_world_path(
+            draw_world_segments(
                 &mut pixmap,
-                &best.points,
+                &best.segments,
                 Color::from_rgba8(50, 230, 200, 255),
                 3.0,
                 &self.camera,
@@ -510,11 +598,24 @@ impl App {
         draw_hud(&mut pixmap, &state);
         drop(state);
 
-        draw_gizmo(&mut pixmap, &start, Color::from_rgba8(50, 220, 50, 255), &self.camera);
-        draw_gizmo(&mut pixmap, &end, Color::from_rgba8(220, 50, 50, 255), &self.camera);
+        draw_gizmo(
+            &mut pixmap,
+            &start,
+            Color::from_rgba8(50, 220, 50, 255),
+            &self.camera,
+        );
+        draw_gizmo(
+            &mut pixmap,
+            &end,
+            Color::from_rgba8(220, 50, 50, 255),
+            &self.camera,
+        );
 
         if let Some(surface) = &mut self.surface {
-            if surface.resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap()).is_err() {
+            if surface
+                .resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap())
+                .is_err()
+            {
                 return;
             }
             let mut buf = match surface.buffer_mut() {
@@ -624,12 +725,7 @@ impl ApplicationHandler for App {
         self.window = Some(window);
     }
 
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _id: WindowId,
-        event: WindowEvent,
-    ) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -746,8 +842,11 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y as f64,
                     MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
                 };
-                let factor =
-                    if scroll_y > 0.0 { 1.1f64.powf(scroll_y) } else { 1.0 / 1.1f64.powf(-scroll_y) };
+                let factor = if scroll_y > 0.0 {
+                    1.1f64.powf(scroll_y)
+                } else {
+                    1.0 / 1.1f64.powf(-scroll_y)
+                };
 
                 let (mx, my) = self.last_mouse;
                 let w = self.width as f32;

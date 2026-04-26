@@ -165,6 +165,99 @@ pub fn eval_path(
     all
 }
 
+// ============================================================================
+// Segmented path evaluation
+// ============================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SegmentKind {
+    Linear,
+    Curve,
+}
+
+#[derive(Clone, Debug)]
+pub struct PathSegment {
+    pub kind: SegmentKind,
+    pub points: Vec<(f64, f64, f64)>,
+    pub boundary_theta: f64,
+}
+
+pub fn eval_path_segmented(
+    params: &[f64],
+    n_clothoids: usize,
+    start: &Pose,
+    n_steps: usize,
+) -> Vec<PathSegment> {
+    let mut x = start.x;
+    let mut y = start.y;
+    let mut theta = start.angle;
+    let mut segments: Vec<PathSegment> = Vec::new();
+
+    for i in 0..n_clothoids {
+        let base = 4 * i;
+        let l = params[base].max(0.0);
+        let ks = params[base + 1];
+        let ke = params[base + 2];
+        let clen = params[base + 3].max(1e-6);
+
+        if l > 1e-10 {
+            let entry = (x, y, theta);
+            let ex = x + l * theta.cos();
+            let ey = y + l * theta.sin();
+            let exit = (ex, ey, theta);
+            x = ex;
+            y = ey;
+            segments.push(PathSegment {
+                kind: SegmentKind::Linear,
+                points: vec![entry, exit],
+                boundary_theta: theta,
+            });
+        }
+
+        let pts = integrate_clothoid(x, y, theta, ks, ke, clen, n_steps);
+        if let Some(&(lx, ly, lt)) = pts.last() {
+            let cloth_pts: Vec<(f64, f64, f64)> = if pts.len() > 1 {
+                pts[1..].to_vec()
+            } else {
+                pts.clone()
+            };
+            if !cloth_pts.is_empty() {
+                segments.push(PathSegment {
+                    kind: SegmentKind::Curve,
+                    points: cloth_pts,
+                    boundary_theta: lt,
+                });
+            }
+            x = lx;
+            y = ly;
+            theta = lt;
+        }
+    }
+
+    let l_final = params[4 * n_clothoids].max(0.0);
+    if l_final > 1e-10 {
+        let entry = (x, y, theta);
+        let ex = x + l_final * theta.cos();
+        let ey = y + l_final * theta.sin();
+        let exit = (ex, ey, theta);
+        segments.push(PathSegment {
+            kind: SegmentKind::Linear,
+            points: vec![entry, exit],
+            boundary_theta: theta,
+        });
+    }
+
+    if segments.is_empty() {
+        segments.push(PathSegment {
+            kind: SegmentKind::Linear,
+            points: vec![(x, y, theta), (x, y, theta)],
+            boundary_theta: theta,
+        });
+    }
+
+    segments
+}
+
 /// Returns the signed, wrapped difference between two angles (in radians), in `(-π, π]`.
 pub fn angle_diff(a: f64, b: f64) -> f64 {
     let pi = std::f64::consts::PI;
@@ -276,13 +369,21 @@ pub fn nelder_mead(f: &dyn Fn(&[f64]) -> f64, x0: &[f64], max_iter: usize) -> Ve
         simplex.push(p);
     }
 
-    let sanitize = |v: f64| if v.is_nan() || v.is_infinite() { 1e10 } else { v };
+    let sanitize = |v: f64| {
+        if v.is_nan() || v.is_infinite() {
+            1e10
+        } else {
+            v
+        }
+    };
     let mut fvals: Vec<f64> = simplex.iter().map(|p| sanitize(f(p))).collect();
 
     for _ in 0..max_iter {
         let mut order: Vec<usize> = (0..=n).collect();
         order.sort_by(|&a, &b| {
-            fvals[a].partial_cmp(&fvals[b]).unwrap_or(std::cmp::Ordering::Equal)
+            fvals[a]
+                .partial_cmp(&fvals[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let best = order[0];
@@ -609,6 +710,72 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // eval_path_segmented
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn eval_path_segmented_pure_straight() {
+        let start = Pose::new(0.0, 0.0, 0.0);
+        let params = [0.0, 0.0, 0.0, 5.0, 0.0];
+        let segs = eval_path_segmented(&params, 1, &start, 100);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].kind, SegmentKind::Curve);
+        assert!(segs[0].points.len() >= 2);
+        let &(x, y, _) = segs[0].points.last().unwrap();
+        assert!((x - 5.0).abs() < 1e-6);
+        assert!(y.abs() < 1e-6);
+    }
+
+    #[test]
+    fn eval_path_segmented_curved_clothoid() {
+        let start = Pose::new(0.0, 0.0, 0.0);
+        let params = [0.0, 1.0, 0.5, 3.0, 0.0];
+        let segs = eval_path_segmented(&params, 1, &start, 100);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].kind, SegmentKind::Curve);
+        assert!(segs[0].points.len() >= 2);
+    }
+
+    #[test]
+    fn eval_path_segmented_prefix_straight_plus_clothoid() {
+        let start = Pose::new(0.0, 0.0, 0.0);
+        let params = [2.0, 1.0, 0.5, 3.0, 0.0];
+        let segs = eval_path_segmented(&params, 1, &start, 100);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].kind, SegmentKind::Linear);
+        assert_eq!(segs[1].kind, SegmentKind::Curve);
+        let lin_end = segs[0].points.last().unwrap();
+        assert!((lin_end.0 - 2.0).abs() < 1e-10);
+        assert!(lin_end.1.abs() < 1e-10);
+        let cur_start = segs[1].points.first().unwrap();
+        assert!((cur_start.0 - 2.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn eval_path_segmented_trailing_straight() {
+        let start = Pose::new(0.0, 0.0, 0.0);
+        let params = [0.0, 0.0, 0.0, 2.0, 3.0];
+        let segs = eval_path_segmented(&params, 1, &start, 100);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].kind, SegmentKind::Curve);
+        assert_eq!(segs[1].kind, SegmentKind::Linear);
+        let (_, _, theta) = segs[1].points.last().unwrap();
+        assert_eq!(segs[1].boundary_theta, *theta);
+    }
+
+    #[test]
+    fn eval_path_segmented_boundary_theta() {
+        let start = Pose::new(0.0, 0.0, 0.0);
+        let params = [2.0, 1.0, 1.0, 3.0, 1.0];
+        let segs = eval_path_segmented(&params, 1, &start, 100);
+        assert_eq!(segs.len(), 3);
+        assert!((segs[0].boundary_theta - 0.0).abs() < 1e-10);
+        let last_seg = segs.last().unwrap();
+        let last_pt = last_seg.points.last().unwrap();
+        assert!((last_seg.boundary_theta - last_pt.2).abs() < 1e-10);
+    }
+
+    // ------------------------------------------------------------------
     // angle_diff
     // ------------------------------------------------------------------
 
@@ -739,11 +906,7 @@ mod tests {
     /// 2-D bowl: x² + y² converges to (0, 0).
     #[test]
     fn nelder_mead_2d_bowl() {
-        let result = nelder_mead(
-            &|x: &[f64]| x[0] * x[0] + x[1] * x[1],
-            &[5.0, -3.0],
-            2000,
-        );
+        let result = nelder_mead(&|x: &[f64]| x[0] * x[0] + x[1] * x[1], &[5.0, -3.0], 2000);
         assert!(result[0].abs() < 0.01, "x = {}", result[0]);
         assert!(result[1].abs() < 0.01, "y = {}", result[1]);
     }
@@ -815,11 +978,7 @@ mod tests {
         // Warm-start with something close: zero-curvature clothoid of length 5
         let x0 = vec![0.0, 0.0, 0.0, 5.0, 0.0];
         let n = 1;
-        let params = nelder_mead(
-            &|p: &[f64]| compute_error(p, n, &start, &end),
-            &x0,
-            1000,
-        );
+        let params = nelder_mead(&|p: &[f64]| compute_error(p, n, &start, &end), &x0, 1000);
         let (pos_err, angle_err) = compute_end_errors(&params, n, &start, &end);
         assert!(pos_err < 0.01, "pos_err = {pos_err}");
         assert!(angle_err < 0.01, "angle_err = {angle_err}");
@@ -834,11 +993,7 @@ mod tests {
 
         let x0 = vec![0.0, 1.0, 0.0, 2.0, 0.0];
         let n = 1;
-        let params = nelder_mead(
-            &|p: &[f64]| compute_error(p, n, &start, &end),
-            &x0,
-            2000,
-        );
+        let params = nelder_mead(&|p: &[f64]| compute_error(p, n, &start, &end), &x0, 2000);
         let (pos_err, angle_err) = compute_end_errors(&params, n, &start, &end);
         assert!(pos_err < 0.1, "pos_err = {pos_err}");
         assert!(angle_err < 0.1, "angle_err = {angle_err}");
