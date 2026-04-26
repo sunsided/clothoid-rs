@@ -5,13 +5,12 @@
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
-use clothoid::optimizer::{
-    compute_end_errors, compute_error, eval_path_segmented, nelder_mead, Lcg, Pose, SegmentKind,
-    DEFAULT_RNG_SEED,
-};
+use clothoid::fit::{FitConfig, FitState, RenderSegment};
+use clothoid::optimizer::{Pose, SegmentKind};
 use softbuffer::{Context, Surface};
 use tiny_skia::{
-    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform,
+    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect, Stroke, StrokeDash,
+    Transform,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -23,35 +22,12 @@ use winit::window::{Window, WindowId};
 // Shared state
 // ============================================================================
 
-#[derive(Clone)]
-struct RenderSegment {
-    kind: SegmentKind,
-    points: Vec<(f32, f32)>,
-    boundary_theta: f32,
-}
-
-#[derive(Clone)]
-struct PathFit {
-    params: Vec<f64>,
-    n_clothoids: usize,
-    total_error: f64,
-    pos_error: f64,
-    angle_error: f64,
-    segments: Vec<RenderSegment>,
-}
-
 struct SharedState {
     start: Pose,
     end: Pose,
-    generation: u64,
-    best_fit: Option<PathFit>,
-    exploration: Option<PathFit>,
-    max_segments: usize,
-    max_kappa: f64,
-    tol_pos: f64,
-    tol_angle: f64,
+    fit_state: FitState,
+    config: FitConfig,
     paused: bool,
-    log: Vec<String>,
 }
 
 impl SharedState {
@@ -67,15 +43,14 @@ impl SharedState {
                 y: 0.0,
                 angle: 0.0,
             },
-            generation: 0,
-            best_fit: None,
-            exploration: None,
-            max_segments: 2,
-            max_kappa: 2.0,
-            tol_pos: 0.05,
-            tol_angle: 0.05,
+            fit_state: FitState::new(),
+            config: FitConfig {
+                max_segments: 2,
+                max_kappa: 2.0,
+                tol_pos: 0.05,
+                tol_angle: 0.05,
+            },
             paused: false,
-            log: Vec::new(),
         }
     }
 }
@@ -85,23 +60,14 @@ impl SharedState {
 // ============================================================================
 
 fn run_optimizer(shared: Arc<Mutex<SharedState>>) {
-    let mut lcg = Lcg::new(DEFAULT_RNG_SEED);
-    let mut last_gen: u64 = u64::MAX;
-    let mut n_clothoids: usize = 1;
-    let mut restart_count: usize = 0;
-
     loop {
-        let (start, end, max_seg, max_kappa, tol_pos, tol_angle, paused, gen) = {
+        let (start, end, config, paused) = {
             let st = shared.lock().unwrap();
             (
                 st.start.clone(),
                 st.end.clone(),
-                st.max_segments,
-                st.max_kappa,
-                st.tol_pos,
-                st.tol_angle,
+                st.config.clone(),
                 st.paused,
-                st.generation,
             )
         };
 
@@ -110,99 +76,9 @@ fn run_optimizer(shared: Arc<Mutex<SharedState>>) {
             continue;
         }
 
-        if gen != last_gen {
-            last_gen = gen;
-            n_clothoids = 1;
-            restart_count = 0;
-            let mut st = shared.lock().unwrap();
-            st.best_fit = None;
-            st.exploration = None;
-        }
-
-        let n = n_clothoids;
-        let n_params = 4 * n + 1;
-
-        let dist_est = {
-            let dx = end.x - start.x;
-            let dy = end.y - start.y;
-            (dx * dx + dy * dy).sqrt().max(0.1)
-        };
-
-        let mut x0 = vec![0.0f64; n_params];
-        for (idx, v) in x0.iter_mut().enumerate() {
-            let r = lcg.next();
-            *v = match idx % 4 {
-                0 => r * dist_est * 0.5,
-                1 | 2 => (r - 0.5) * 2.0 * max_kappa,
-                3 => r * dist_est * 1.5 + 0.1,
-                _ => 0.0,
-            };
-        }
-        // Override last param (final straight segment)
-        let r = lcg.next();
-        x0[n_params - 1] = r * dist_est * 0.5;
-
-        let start_c = start.clone();
-        let end_c = end.clone();
-        let params = nelder_mead(&|p: &[f64]| compute_error(p, n, &start_c, &end_c), &x0, 500);
-
-        let total_err = compute_error(&params, n, &start, &end);
-        let (pos_err, angle_err) = compute_end_errors(&params, n, &start, &end);
-
-        let path_segs = eval_path_segmented(&params, n, &start, 40);
-        let render_segs: Vec<RenderSegment> = path_segs
-            .into_iter()
-            .map(|s| RenderSegment {
-                kind: s.kind,
-                points: s
-                    .points
-                    .iter()
-                    .map(|&(x, y, _)| (x as f32, y as f32))
-                    .collect(),
-                boundary_theta: s.boundary_theta as f32,
-            })
-            .collect();
-
-        let fit = PathFit {
-            params,
-            n_clothoids: n,
-            total_error: total_err,
-            pos_error: pos_err,
-            angle_error: angle_err,
-            segments: render_segs,
-        };
-
         {
             let mut st = shared.lock().unwrap();
-            if st.generation == last_gen {
-                st.exploration = Some(fit.clone());
-                if pos_err < tol_pos && angle_err < tol_angle {
-                    let is_better = match &st.best_fit {
-                        None => true,
-                        Some(best) => total_err < best.total_error,
-                    };
-                    if is_better {
-                        st.log.push(format!(
-                            "Found fit: n={} pos={:.3} ang={:.3}",
-                            n, pos_err, angle_err
-                        ));
-                        if st.log.len() > 20 {
-                            st.log.remove(0);
-                        }
-                        st.best_fit = Some(fit);
-                    }
-                }
-            }
-        }
-
-        restart_count += 1;
-        if restart_count >= 200 {
-            restart_count = 0;
-            n_clothoids = if n_clothoids >= max_seg {
-                1
-            } else {
-                n_clothoids + 1
-            };
+            st.fit_state.step(&start, &end, &config);
         }
 
         std::thread::sleep(std::time::Duration::from_micros(100));
@@ -261,7 +137,7 @@ fn fill_rect_solid(pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, color: C
     if w <= 0.0 || h <= 0.0 {
         return;
     }
-    if let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) {
+    if let Some(rect) = Rect::from_xywh(x, y, w, h) {
         let mut paint = Paint::default();
         paint.set_color(color);
         pixmap.fill_rect(rect, &paint, Transform::identity(), None);
@@ -444,7 +320,6 @@ fn draw_grid(pixmap: &mut Pixmap, camera: &Camera) {
     let y0 = y_min.floor() as i32;
     let y1 = y_max.ceil() as i32;
 
-    // Guard against too many lines (extreme zoom-out).
     if (x1 - x0).abs() > 200 || (y1 - y0).abs() > 200 {
         return;
     }
@@ -459,16 +334,21 @@ fn draw_grid(pixmap: &mut Pixmap, camera: &Camera) {
     }
 }
 
-fn draw_hud(pixmap: &mut Pixmap, state: &SharedState) {
+fn draw_hud(
+    pixmap: &mut Pixmap,
+    max_segments: usize,
+    max_kappa: f64,
+    best_fit_exists: bool,
+    paused: bool,
+) {
     let w = pixmap.width() as f32;
     let h = pixmap.height() as f32;
 
-    // Segment count squares
     let sq = 12.0f32;
     let gap = 3.0f32;
     let sy = h - 35.0;
     for i in 0..8usize {
-        let color = if i < state.max_segments {
+        let color = if i < max_segments {
             Color::from_rgba8(100, 200, 100, 255)
         } else {
             Color::from_rgba8(40, 40, 40, 255)
@@ -477,7 +357,6 @@ fn draw_hud(pixmap: &mut Pixmap, state: &SharedState) {
         fill_rect_solid(pixmap, sx, sy, sq, sq, color);
     }
 
-    // Max kappa bar
     let bar_x = 10.0f32;
     let bar_y = h - 55.0;
     let bar_w = 120.0f32;
@@ -490,7 +369,7 @@ fn draw_hud(pixmap: &mut Pixmap, state: &SharedState) {
         bar_h,
         Color::from_rgba8(40, 40, 40, 255),
     );
-    let frac = ((state.max_kappa - 0.05) / (20.0 - 0.05)).clamp(0.0, 1.0) as f32;
+    let frac = ((max_kappa - 0.05) / (20.0 - 0.05)).clamp(0.0, 1.0) as f32;
     fill_rect_solid(
         pixmap,
         bar_x,
@@ -500,16 +379,14 @@ fn draw_hud(pixmap: &mut Pixmap, state: &SharedState) {
         Color::from_rgba8(200, 150, 50, 255),
     );
 
-    // Fit found indicator (top-right)
-    let fit_color = if state.best_fit.is_some() {
+    let fit_color = if best_fit_exists {
         Color::from_rgba8(50, 200, 50, 255)
     } else {
         Color::from_rgba8(50, 50, 50, 255)
     };
     fill_rect_solid(pixmap, w - 35.0, 10.0, 25.0, 25.0, fit_color);
 
-    // Paused indicator
-    if state.paused {
+    if paused {
         fill_rect_solid(
             pixmap,
             w - 35.0,
@@ -574,7 +451,7 @@ impl App {
 
         let state = self.shared.lock().unwrap();
 
-        if let Some(ref expl) = state.exploration {
+        if let Some(ref expl) = state.fit_state.exploration {
             draw_world_segments(
                 &mut pixmap,
                 &expl.segments,
@@ -583,7 +460,7 @@ impl App {
                 &self.camera,
             );
         }
-        if let Some(ref best) = state.best_fit {
+        if let Some(ref best) = state.fit_state.best_fit {
             draw_world_segments(
                 &mut pixmap,
                 &best.segments,
@@ -595,7 +472,13 @@ impl App {
 
         let start = state.start.clone();
         let end = state.end.clone();
-        draw_hud(&mut pixmap, &state);
+        draw_hud(
+            &mut pixmap,
+            state.config.max_segments,
+            state.config.max_kappa,
+            state.fit_state.best_fit.is_some(),
+            state.paused,
+        );
         drop(state);
 
         draw_gizmo(
@@ -746,23 +629,23 @@ impl ApplicationHandler for App {
                         }
                         PhysicalKey::Code(KeyCode::Equal) => {
                             let mut st = self.shared.lock().unwrap();
-                            if st.max_segments < 8 {
-                                st.max_segments += 1;
+                            if st.config.max_segments < 8 {
+                                st.config.max_segments += 1;
                             }
                         }
                         PhysicalKey::Code(KeyCode::Minus) => {
                             let mut st = self.shared.lock().unwrap();
-                            if st.max_segments > 1 {
-                                st.max_segments -= 1;
+                            if st.config.max_segments > 1 {
+                                st.config.max_segments -= 1;
                             }
                         }
                         PhysicalKey::Code(KeyCode::BracketLeft) => {
                             let mut st = self.shared.lock().unwrap();
-                            st.max_kappa = (st.max_kappa * 0.8).max(0.05);
+                            st.config.max_kappa = (st.config.max_kappa * 0.8).max(0.05);
                         }
                         PhysicalKey::Code(KeyCode::BracketRight) => {
                             let mut st = self.shared.lock().unwrap();
-                            st.max_kappa = (st.max_kappa * 1.25).min(20.0);
+                            st.config.max_kappa = (st.config.max_kappa * 1.25).min(20.0);
                         }
                         _ => {}
                     }
@@ -794,24 +677,24 @@ impl ApplicationHandler for App {
                         DragTarget::StartPos => {
                             st.start.x = wx;
                             st.start.y = wy;
-                            st.generation += 1;
+                            st.fit_state.bump_generation();
                         }
                         DragTarget::StartDir => {
                             let dx = wx - st.start.x;
                             let dy = wy - st.start.y;
                             st.start.angle = dy.atan2(dx);
-                            st.generation += 1;
+                            st.fit_state.bump_generation();
                         }
                         DragTarget::EndPos => {
                             st.end.x = wx;
                             st.end.y = wy;
-                            st.generation += 1;
+                            st.fit_state.bump_generation();
                         }
                         DragTarget::EndDir => {
                             let dx = wx - st.end.x;
                             let dy = wy - st.end.y;
                             st.end.angle = dy.atan2(dx);
-                            st.generation += 1;
+                            st.fit_state.bump_generation();
                         }
                     }
                 }

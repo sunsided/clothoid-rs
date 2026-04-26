@@ -1,3 +1,4 @@
+pub mod fit;
 pub mod optimizer;
 
 /// The square root of π.
