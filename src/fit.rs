@@ -4,8 +4,10 @@
 //! between two 2D poses using a pluggable [`Planner`] strategy.
 
 #[cfg(feature = "cma-es")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]
 use crate::optimizer::CmaEs;
 #[cfg(feature = "nelder-mead")]
+#[cfg_attr(docsrs, doc(cfg(feature = "nelder-mead")))]
 use crate::optimizer::NelderMead;
 use crate::optimizer::{
     DEFAULT_RNG_SEED, Lcg, Optimizer, PathSegment, PlanObjective, Pose, SegmentKind,
@@ -114,6 +116,7 @@ pub struct DefaultPlanner<O: Optimizer> {
 }
 
 #[cfg(feature = "nelder-mead")]
+#[cfg_attr(docsrs, doc(cfg(feature = "nelder-mead")))]
 impl DefaultPlanner<NelderMead> {
     #[must_use]
     pub fn new() -> Self {
@@ -132,6 +135,7 @@ impl DefaultPlanner<NelderMead> {
 }
 
 #[cfg(feature = "nelder-mead")]
+#[cfg_attr(docsrs, doc(cfg(feature = "nelder-mead")))]
 impl Default for DefaultPlanner<NelderMead> {
     fn default() -> Self {
         Self::new()
@@ -139,6 +143,7 @@ impl Default for DefaultPlanner<NelderMead> {
 }
 
 #[cfg(feature = "cma-es")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]
 impl DefaultPlanner<CmaEs> {
     #[must_use]
     pub fn new_cma() -> Self {

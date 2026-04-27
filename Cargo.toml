@@ -10,15 +10,24 @@ keywords = ["clothoid", "euler-spiral", "path-planning", "fresnel", "trajectory"
 categories = ["algorithms", "mathematics", "science::robotics"]
 
 [features]
-default = ["optimizers"]
+## Default features: both optimizers and path-traits integration.
+default = ["optimizers", "path-traits"]
+
+## Fresnel integral computation via the `fresnel` crate.
 fresnel = ["dep:fresnel"]
 
-# Umbrella: enables both solvers + the fit module.
+## Umbrella: enables both solvers + the fit module.
 optimizers = ["nelder-mead", "cma-es"]
 
-# Individual solvers.
+## Nelder-Mead simplex optimizer.
 nelder-mead = []
+
+## CMA-ES (Covariance Matrix Adaptation Evolution Strategy) optimizer.
 cma-es = []
+
+## path-traits integration: exposes ClothoidArc, LinearSegment, ClothoidPath
+## as first-class path_traits::Path implementations.
+path-traits = ["dep:path-traits"]
 
 [[example]]
 name = "interactive_demo"
@@ -26,6 +35,10 @@ required-features = ["nelder-mead", "cma-es"]
 
 [dependencies]
 fresnel = { version = "0.1.0", optional = true }
+path-traits = { version = "0.1.0", optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dev-dependencies]
 assert_float_eq = "1.1.3"

@@ -23,25 +23,34 @@ pub use pose::Pose;
 pub use state::ClothoidState;
 
 #[cfg(any(feature = "nelder-mead", feature = "cma-es"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "nelder-mead", feature = "cma-es"))))]
 pub mod solver;
 #[cfg(any(feature = "nelder-mead", feature = "cma-es"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "nelder-mead", feature = "cma-es"))))]
 pub use solver::Optimizer;
 
 #[cfg(feature = "nelder-mead")]
+#[cfg_attr(docsrs, doc(cfg(feature = "nelder-mead")))]
 pub mod nelder_mead;
 #[cfg(feature = "nelder-mead")]
+#[cfg_attr(docsrs, doc(cfg(feature = "nelder-mead")))]
 pub use nelder_mead::{NelderMead, nelder_mead};
 
 #[cfg(feature = "cma-es")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]
 pub mod cmaes;
 #[cfg(feature = "cma-es")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]
 pub mod linalg;
 pub mod rng;
 
 #[cfg(feature = "cma-es")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]
 pub use cmaes::CmaEs;
 #[cfg(feature = "cma-es")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]
 pub use linalg::jacobi_eigen;
 #[cfg(feature = "cma-es")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]
 pub use rng::randn;
 pub use rng::{DEFAULT_RNG_SEED, Lcg};
