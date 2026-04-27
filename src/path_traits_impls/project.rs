@@ -1,6 +1,6 @@
 //! Shared projection helpers for sampling-based closest-point search.
 //!
-//! Provides `sample_distances` to find the nearest bucket and
+//! Provides `coarse_project` to find the nearest bucket and
 //! `golden_section_refine` for local refinement.
 
 use path_traits::{Path, PathError, Point};
