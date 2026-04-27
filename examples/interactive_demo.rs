@@ -1,12 +1,22 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_assignments)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::needless_range_loop,
+    clippy::similar_names,
+    clippy::many_single_char_names
+)]
 
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use clothoid::fit::{FitConfig, FitState, RenderSegment};
-use clothoid::optimizer::{Pose, SegmentKind};
+use clothoid::optimizer::{PlanObjective, Pose, SegmentKind, SymmetryMode};
 use softbuffer::{Context, Surface};
 use tiny_skia::{
     Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect, Stroke, StrokeDash,
@@ -153,6 +163,7 @@ struct SharedState {
     config: FitConfig,
     paused: bool,
     optimizer_mode: OptimizerMode,
+    show_objective_panel: bool,
 }
 
 impl SharedState {
@@ -174,9 +185,11 @@ impl SharedState {
                 max_kappa: 2.0,
                 tol_pos: 0.05,
                 tol_angle: 0.05,
+                ..Default::default()
             },
             paused: false,
             optimizer_mode: OptimizerMode::NelderMead,
+            show_objective_panel: false,
         }
     }
 
@@ -203,7 +216,7 @@ impl SharedState {
 // Optimizer thread
 // ============================================================================
 
-fn run_optimizer(shared: Arc<Mutex<SharedState>>) {
+fn run_optimizer(shared: &Arc<Mutex<SharedState>>) {
     loop {
         let (start, end, config, paused) = {
             let st = shared.lock().unwrap();
@@ -243,15 +256,17 @@ impl Camera {
         }
     }
 
+    #[allow(clippy::cast_lossless)]
     fn world_to_screen(&self, wx: f64, wy: f64, w: f32, h: f32) -> (f32, f32) {
-        let sx = ((wx - self.pan_x) * self.zoom + w as f64 / 2.0) as f32;
-        let sy = ((wy - self.pan_y) * self.zoom + h as f64 / 2.0) as f32;
+        let sx = ((wx - self.pan_x) * self.zoom + f64::from(w) / 2.0) as f32;
+        let sy = ((wy - self.pan_y) * self.zoom + f64::from(h) / 2.0) as f32;
         (sx, sy)
     }
 
+    #[allow(clippy::cast_lossless)]
     fn screen_to_world(&self, sx: f64, sy: f64, w: f32, h: f32) -> (f64, f64) {
-        let wx = (sx - w as f64 / 2.0) / self.zoom + self.pan_x;
-        let wy = (sy - h as f64 / 2.0) / self.zoom + self.pan_y;
+        let wx = (sx - f64::from(w) / 2.0) / self.zoom + self.pan_x;
+        let wy = (sy - f64::from(h) / 2.0) / self.zoom + self.pan_y;
         (wx, wy)
     }
 }
@@ -291,9 +306,11 @@ fn draw_line(pixmap: &mut Pixmap, x0: f32, y0: f32, x1: f32, y1: f32, color: Col
         let mut paint = Paint::default();
         paint.set_color(color);
         paint.anti_alias = true;
-        let mut stroke = Stroke::default();
-        stroke.width = width;
-        stroke.line_cap = LineCap::Round;
+        let stroke = Stroke {
+            width,
+            line_cap: LineCap::Round,
+            ..Default::default()
+        };
         pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
     }
 }
@@ -305,8 +322,10 @@ fn draw_circle_stroke(pixmap: &mut Pixmap, cx: f32, cy: f32, r: f32, color: Colo
         let mut paint = Paint::default();
         paint.set_color(color);
         paint.anti_alias = true;
-        let mut stroke = Stroke::default();
-        stroke.width = width;
+        let stroke = Stroke {
+            width,
+            ..Default::default()
+        };
         pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
     }
 }
@@ -416,25 +435,36 @@ fn draw_world_segments(
         if seg.points.len() < 2 {
             continue;
         }
+        #[allow(clippy::cast_lossless)]
         let seg_color = segment_color(color, idx);
         let mut pb = PathBuilder::new();
-        let (sx, sy) = camera.world_to_screen(seg.points[0].0 as f64, seg.points[0].1 as f64, w, h);
+        let (sx, sy) =
+            camera.world_to_screen(f64::from(seg.points[0].0), f64::from(seg.points[0].1), w, h);
         pb.move_to(sx, sy);
         for &(wx, wy) in &seg.points[1..] {
-            let (sx, sy) = camera.world_to_screen(wx as f64, wy as f64, w, h);
+            let (sx, sy) = camera.world_to_screen(f64::from(wx), f64::from(wy), w, h);
             pb.line_to(sx, sy);
         }
         if let Some(path) = pb.finish() {
             let mut paint = Paint::default();
             paint.set_color(seg_color);
             paint.anti_alias = true;
-            let mut stroke = Stroke::default();
-            stroke.width = width;
-            stroke.line_cap = LineCap::Round;
-            stroke.line_join = LineJoin::Round;
-            if seg.kind == SegmentKind::Linear {
-                stroke.dash = StrokeDash::new(dash_intervals.clone(), 0.0);
-            }
+            let stroke = if seg.kind == SegmentKind::Linear {
+                Stroke {
+                    width,
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Round,
+                    dash: StrokeDash::new(dash_intervals.clone(), 0.0),
+                    ..Default::default()
+                }
+            } else {
+                Stroke {
+                    width,
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Round,
+                    ..Default::default()
+                }
+            };
             pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
         }
     }
@@ -449,7 +479,8 @@ fn draw_world_segments(
         let tick_c = segment_color(color, i);
         let (lx, ly) = seg.points.last().unwrap();
         let theta = seg.boundary_theta;
-        let (sx, sy) = camera.world_to_screen(*lx as f64, *ly as f64, w, h);
+        #[allow(clippy::cast_lossless)]
+        let (sx, sy) = camera.world_to_screen(f64::from(*lx), f64::from(*ly), w, h);
         let perp_x = -theta.sin();
         let perp_y = theta.cos();
         let x0 = sx - tick_half_len * perp_x;
@@ -461,8 +492,8 @@ fn draw_world_segments(
 }
 
 fn draw_grid(pixmap: &mut Pixmap, camera: &Camera) {
-    let pw = pixmap.width() as f64;
-    let ph = pixmap.height() as f64;
+    let pw = f64::from(pixmap.width());
+    let ph = f64::from(pixmap.height());
     let w = pw as f32;
     let h = ph as f32;
 
@@ -480,14 +511,31 @@ fn draw_grid(pixmap: &mut Pixmap, camera: &Camera) {
         return;
     }
 
+    #[allow(clippy::cast_lossless)]
     for xi in x0..=x1 {
-        let (sx, _) = camera.world_to_screen(xi as f64, 0.0, w, h);
+        let (sx, _) = camera.world_to_screen(f64::from(xi), 0.0, w, h);
         draw_line(pixmap, sx, 0.0, sx, h, grid_color, 1.0);
     }
     for yi in y0..=y1 {
-        let (_, sy) = camera.world_to_screen(0.0, yi as f64, w, h);
+        let (_, sy) = camera.world_to_screen(0.0, f64::from(yi), w, h);
         draw_line(pixmap, 0.0, sy, w, sy, grid_color, 1.0);
     }
+}
+
+fn nudge_weight(w: &mut f64) {
+    const LADDER: [f64; 12] = [
+        0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0,
+    ];
+    let current = *w;
+    let mut idx = LADDER
+        .iter()
+        .position(|&v| v >= current)
+        .unwrap_or(LADDER.len());
+    if idx >= LADDER.len() {
+        idx = LADDER.len() - 1;
+    }
+    let next = if idx + 1 < LADDER.len() { idx + 1 } else { 0 };
+    *w = LADDER[next];
 }
 
 fn draw_hud(
@@ -499,7 +547,7 @@ fn draw_hud(
     optimizer_name: &str,
     generation: u64,
     log_tail: &[String],
-) {
+) -> (f32, f32) {
     let w = pixmap.width() as f32;
     let h = pixmap.height() as f32;
     let scale = 2.0f32;
@@ -520,7 +568,7 @@ fn draw_hud(
         pixmap,
         bl_x,
         bl_y,
-        &format!("[SPACE] {}", running_text),
+        &format!("[SPACE] {running_text}"),
         running_color,
         scale,
     );
@@ -530,7 +578,7 @@ fn draw_hud(
         pixmap,
         bl_x,
         bl_y,
-        &format!("[+/-]   SEGMENTS: {}/{}", max_segments, 8),
+        &format!("[+/-]   SEGMENTS: {max_segments}/8"),
         grey,
         scale,
     );
@@ -540,7 +588,7 @@ fn draw_hud(
         pixmap,
         bl_x,
         bl_y,
-        &format!("[[/]]   MAX KAPPA: {:.2}", max_kappa),
+        &format!("[[/]]   MAX KAPPA: {max_kappa:.2}"),
         grey,
         scale,
     );
@@ -560,11 +608,14 @@ fn draw_hud(
     bl_y -= line_h;
 
     draw_text(pixmap, bl_x, bl_y, "[F]     RESTART FIT", grey, scale);
+    bl_y -= line_h;
+
+    draw_text(pixmap, bl_x, bl_y, "[W]     OBJECTIVE PANEL", grey, scale);
 
     // Top-right: generation and best fit
     let mut tr_y = margin;
 
-    let gen_text = format!("GEN: {}", generation);
+    let gen_text = format!("GEN: {generation}");
     let gen_w = font::text_width(&gen_text, scale as u32);
     let gen_x = w - margin - gen_w as f32;
     draw_text(pixmap, gen_x, tr_y, &gen_text, grey, scale);
@@ -572,10 +623,7 @@ fn draw_hud(
 
     let fit_text = match best_fit {
         Some((pos_err, ang_err, total_err)) => {
-            format!(
-                "BEST FIT: POS={:.3} ANG={:.3} ERR={:.4}",
-                pos_err, ang_err, total_err
-            )
+            format!("BEST FIT: POS={pos_err:.3} ANG={ang_err:.3} ERR={total_err:.4}")
         }
         None => "BEST FIT: -".to_string(),
     };
@@ -592,6 +640,121 @@ fn draw_hud(
         let log_y = h - margin - (log_count as f32 - i as f32) * line_h;
         draw_text(pixmap, log_x, log_y, entry, dim_grey, scale);
     }
+
+    (bl_x, bl_y)
+}
+
+fn draw_objective_panel(
+    pixmap: &mut Pixmap,
+    objective: &PlanObjective,
+    max_kappa_ui: f64,
+    _base_x: f32,
+    base_y: f32,
+) {
+    let scale = 1.5f32;
+    let line_h = 7.0 * scale + 1.0;
+    let grey = Color::from_rgba8(180, 180, 180, 255);
+    let yellow = Color::from_rgba8(220, 220, 50, 255);
+    let margin = 10.0f32;
+
+    let fmt_w = |w_val: f64| -> String {
+        if w_val == 0.0 {
+            "OFF".to_string()
+        } else if w_val < 0.01 {
+            format!("{w_val:.4}")
+        } else if w_val < 1.0 {
+            format!("{w_val:.2}")
+        } else {
+            format!("{w_val:.1}")
+        }
+    };
+
+    let rows: Vec<(String, String)> = vec![
+        ("[1] end-pos".into(), fmt_w(objective.w_end_pos)),
+        ("[2] end-angle".into(), fmt_w(objective.w_end_angle)),
+        ("[3] max-kappa".into(), fmt_w(objective.w_max_kappa)),
+        ("[4] sign-flips".into(), fmt_w(objective.w_sign_flips)),
+        ("[5] kappa-rate".into(), fmt_w(objective.w_kappa_rate)),
+        ("[6] G2".into(), fmt_w(objective.w_g2)),
+        (
+            "[7] kappa-0 start".into(),
+            fmt_w(objective.w_kappa_start_zero),
+        ),
+        ("[8] kappa-0 end".into(), fmt_w(objective.w_kappa_end_zero)),
+        (
+            "[9] min-seg-len".into(),
+            format!(
+                "{} (L={:.1})",
+                fmt_w(objective.w_min_seg_len),
+                objective.min_seg_len
+            ),
+        ),
+        (
+            "[0] total-len".into(),
+            match objective.target_length {
+                Some(t) => format!("{} (T={:.1})", fmt_w(objective.w_total_length), t),
+                None => fmt_w(objective.w_total_length),
+            },
+        ),
+        (
+            "[Y] symmetry".into(),
+            match objective.symmetry {
+                SymmetryMode::Auto => "AUTO".into(),
+                SymmetryMode::Off => "OFF".into(),
+                SymmetryMode::On => "ON".into(),
+            },
+        ),
+    ];
+
+    let note = format!("(bound={max_kappa_ui:.2} via [/])");
+    let total_lines = 1 /* title */ + rows.len() + 1 /* note */;
+
+    let pw = pixmap.width() as f32;
+    let ph = pixmap.height() as f32;
+
+    // Compute max line width to determine panel dimensions
+    let title_w = font::text_width("OBJECTIVE PANEL", scale as u32);
+    let max_row_w = rows
+        .iter()
+        .map(|(label, value)| font::text_width(&format!("{label}  {value}"), scale as u32))
+        .max()
+        .unwrap_or(0);
+    let note_w = font::text_width(&note, scale as u32);
+    let panel_w = (title_w.max(max_row_w).max(note_w)) as f32 + 2.0 * margin;
+    let panel_h = (total_lines as f32) * line_h + 2.0 * margin;
+
+    // Anchor panel to bottom-left with margin
+    let base_x = margin;
+    let mut y = base_y - panel_h;
+
+    // Draw background
+    fill_rect_solid(
+        pixmap,
+        base_x,
+        y,
+        panel_w,
+        panel_h,
+        Color::from_rgba8(30, 30, 30, 230),
+    );
+
+    y += margin;
+    draw_text(pixmap, base_x + margin, y, "OBJECTIVE PANEL", yellow, scale);
+    y += line_h;
+
+    for (label, value) in &rows {
+        let line = format!("{label}  {value}");
+        draw_text(pixmap, base_x + margin, y, &line, grey, scale);
+        y += line_h;
+    }
+
+    draw_text(
+        pixmap,
+        base_x + margin,
+        y,
+        &note,
+        Color::from_rgba8(120, 120, 120, 255),
+        scale,
+    );
 }
 
 // ============================================================================
@@ -637,9 +800,8 @@ impl App {
             return;
         }
 
-        let mut pixmap = match Pixmap::new(w, h) {
-            Some(p) => p,
-            None => return,
+        let Some(mut pixmap) = Pixmap::new(w, h) else {
+            return;
         };
 
         pixmap.fill(Color::from_rgba8(40, 40, 40, 255));
@@ -682,7 +844,10 @@ impl App {
             .rev()
             .cloned()
             .collect();
-        draw_hud(
+        let objective = state.config.objective.clone();
+        let show_panel = state.show_objective_panel;
+        let max_kappa_ui = state.config.max_kappa;
+        let (panel_x, panel_y) = draw_hud(
             &mut pixmap,
             state.config.max_segments,
             state.config.max_kappa,
@@ -692,6 +857,9 @@ impl App {
             generation,
             &log_tail,
         );
+        if show_panel {
+            draw_objective_panel(&mut pixmap, &objective, max_kappa_ui, panel_x, panel_y);
+        }
         drop(state);
 
         draw_gizmo(
@@ -714,19 +882,24 @@ impl App {
             {
                 return;
             }
-            let mut buf = match surface.buffer_mut() {
-                Ok(b) => b,
-                Err(_) => return,
+            let Ok(mut buf) = surface.buffer_mut() else {
+                return;
             };
             let pixels = pixmap.pixels();
             for (i, px) in pixels.iter().enumerate() {
-                let a = px.alpha() as u32;
+                let a = u32::from(px.alpha());
                 let (r, g, b) = if a == 0 {
                     (0, 0, 0)
                 } else {
-                    let r = ((px.red() as u32 * 255 + a / 2) / a).min(255);
-                    let g = ((px.green() as u32 * 255 + a / 2) / a).min(255);
-                    let b = ((px.blue() as u32 * 255 + a / 2) / a).min(255);
+                    let r = ((u32::from(px.red()) * 255 + a / 2).checked_div(a))
+                        .unwrap_or(0)
+                        .min(255);
+                    let g = ((u32::from(px.green()) * 255 + a / 2).checked_div(a))
+                        .unwrap_or(0)
+                        .min(255);
+                    let b = ((u32::from(px.blue()) * 255 + a / 2).checked_div(a))
+                        .unwrap_or(0)
+                        .min(255);
                     (r, g, b)
                 };
                 if i < buf.len() {
@@ -766,10 +939,10 @@ impl App {
         let dist = |ax: f64, ay: f64| ((mx - ax).powi(2) + (my - ay).powi(2)).sqrt();
 
         let candidates: [(f64, DragTarget); 4] = [
-            (dist(scx as f64, scy as f64), DragTarget::StartPos),
-            (dist(stx as f64, sty as f64), DragTarget::StartDir),
-            (dist(ecx as f64, ecy as f64), DragTarget::EndPos),
-            (dist(etx as f64, ety as f64), DragTarget::EndDir),
+            (dist(f64::from(scx), f64::from(scy)), DragTarget::StartPos),
+            (dist(f64::from(stx), f64::from(sty)), DragTarget::StartDir),
+            (dist(f64::from(ecx), f64::from(ecy)), DragTarget::EndPos),
+            (dist(f64::from(etx), f64::from(ety)), DragTarget::EndDir),
         ];
 
         self.drag_target = candidates
@@ -829,7 +1002,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 match event.physical_key {
-                    PhysicalKey::Code(KeyCode::Escape) | PhysicalKey::Code(KeyCode::KeyQ) => {
+                    PhysicalKey::Code(KeyCode::Escape | KeyCode::KeyQ) => {
                         event_loop.exit();
                     }
                     PhysicalKey::Code(KeyCode::Space) => {
@@ -866,6 +1039,58 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::BracketRight) => {
                         let mut st = self.shared.lock().unwrap();
                         st.config.max_kappa = (st.config.max_kappa * 1.25).min(20.0);
+                    }
+                    PhysicalKey::Code(KeyCode::KeyW) => {
+                        let mut st = self.shared.lock().unwrap();
+                        st.show_objective_panel = !st.show_objective_panel;
+                    }
+                    PhysicalKey::Code(KeyCode::KeyY) => {
+                        let mut st = self.shared.lock().unwrap();
+                        st.config.objective.symmetry = match st.config.objective.symmetry {
+                            SymmetryMode::Auto => SymmetryMode::Off,
+                            SymmetryMode::Off => SymmetryMode::On,
+                            SymmetryMode::On => SymmetryMode::Auto,
+                        };
+                    }
+                    PhysicalKey::Code(KeyCode::Digit1) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_end_pos);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit2) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_end_angle);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit3) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_max_kappa);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit4) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_sign_flips);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit5) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_kappa_rate);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit6) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_g2);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit7) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_kappa_start_zero);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit8) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_kappa_end_zero);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit9) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_min_seg_len);
+                    }
+                    PhysicalKey::Code(KeyCode::Digit0) => {
+                        let mut st = self.shared.lock().unwrap();
+                        nudge_weight(&mut st.config.objective.w_total_length);
                     }
                     _ => {}
                 }
@@ -941,7 +1166,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_y = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y as f64,
+                    MouseScrollDelta::LineDelta(_, y) => f64::from(y),
                     MouseScrollDelta::PixelDelta(pos) => pos.y / 50.0,
                 };
                 let factor = if scroll_y > 0.0 {
@@ -956,8 +1181,8 @@ impl ApplicationHandler for App {
                 let (wx, wy) = self.camera.screen_to_world(mx, my, w, h);
                 self.camera.zoom *= factor;
                 let (nsx, nsy) = self.camera.world_to_screen(wx, wy, w, h);
-                self.camera.pan_x += (nsx as f64 - mx) / self.camera.zoom;
-                self.camera.pan_y += (nsy as f64 - my) / self.camera.zoom;
+                self.camera.pan_x += (f64::from(nsx) - mx) / self.camera.zoom;
+                self.camera.pan_y += (f64::from(nsy) - my) / self.camera.zoom;
             }
 
             WindowEvent::RedrawRequested => {
@@ -977,7 +1202,7 @@ fn main() {
 
     let shared_opt = shared.clone();
     std::thread::spawn(move || {
-        run_optimizer(shared_opt);
+        run_optimizer(&shared_opt);
     });
 
     let event_loop = EventLoop::new().unwrap();

@@ -36,20 +36,22 @@ pub mod fit;
 pub mod optimizer;
 
 pub use fit::{DefaultPlanner, Planner};
-pub use optimizer::{CmaEs, NelderMead, Optimizer};
+pub use optimizer::{CmaEs, NelderMead, Optimizer, PlanObjective, SymmetryMode};
 
 /// The square root of π (`√π ≈ 1.77245`).
 ///
 /// Used in the scaling of Fresnel integral computations.
 #[allow(dead_code)]
-const PI_SQRT: f64 = 1.7724538509055160272981674833411451827975494561223871282138077898f64;
+const PI_SQRT: f64 =
+    1.772_453_850_905_516_027_298_167_483_341_145_182_797_549_456_122_387_128_213_807_789_8_f64;
 
 /// The inverse of the square root of π (`1/√π ≈ 0.56419`).
 ///
 /// Used to normalize arguments before passing them to Fresnel integral
 /// computations (see [`PI_SQRT`]).
 #[allow(dead_code)]
-const INV_PI_SQRT: f64 = 0.5641895835477562869480794515607725858440506293289988568440857217f64;
+const INV_PI_SQRT: f64 =
+    0.564_189_583_547_756_286_948_079_451_560_772_585_844_050_629_328_998_856_844_085_721_7_f64;
 
 /// A point in 2D Cartesian space.
 ///
@@ -84,6 +86,7 @@ impl Clothoid {
     /// # Arguments
     ///
     /// * `a` — The scaling factor. Larger values produce gentler curves.
+    #[must_use]
     pub fn new(a: f64) -> Self {
         Self { a }
     }
@@ -101,6 +104,7 @@ impl Clothoid {
     ///
     /// The direction angle in radians.
     #[inline]
+    #[must_use]
     pub fn direction_angle(&self, arc_length: f64) -> f64 {
         0.5 * (arc_length * arc_length) / (self.a * self.a)
     }
@@ -117,7 +121,7 @@ impl Clothoid {
     /// # Returns
     ///
     /// A [`Point2`] on the clothoid curve.
-    #[inline(always)]
+    #[inline]
     #[allow(dead_code)]
     fn calculate(&self, t: f64) -> Point2 {
         #[cfg(feature = "fresnel")]
@@ -269,6 +273,12 @@ impl FresnelSinCos {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::float_cmp,
+        clippy::cast_precision_loss,
+        clippy::unreadable_literal
+    )]
+
     use super::*;
     use assert_float_eq::*;
 
@@ -338,7 +348,7 @@ mod tests {
             }
             let mut product = 1.;
             for i in 0..n {
-                product *= a + (i as f64)
+                product *= a + (i as f64);
             }
             product
         }

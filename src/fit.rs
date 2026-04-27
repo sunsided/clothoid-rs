@@ -4,8 +4,8 @@
 //! between two 2D poses using a pluggable [`Planner`] strategy.
 
 use crate::optimizer::{
-    compute_end_errors, compute_error, eval_path_segmented, CmaEs, Lcg, NelderMead, Optimizer,
-    PathSegment, Pose, SegmentKind, DEFAULT_RNG_SEED,
+    compute_end_errors, eval_path_segmented, CmaEs, Lcg, NelderMead, Optimizer, PathSegment,
+    PlanObjective, Pose, SegmentKind, DEFAULT_RNG_SEED,
 };
 
 /// A render-ready segment of a fitted path.
@@ -23,7 +23,9 @@ impl From<&PathSegment> for RenderSegment {
     fn from(s: &PathSegment) -> Self {
         RenderSegment {
             kind: s.kind,
+            #[allow(clippy::cast_possible_truncation)]
             points: s.points.iter().map(|p| (p.x as f32, p.y as f32)).collect(),
+            #[allow(clippy::cast_possible_truncation)]
             boundary_theta: s.boundary_theta as f32,
         }
     }
@@ -57,6 +59,20 @@ pub struct FitConfig {
     pub tol_pos: f64,
     /// Tolerance for angle error to consider a fit successful.
     pub tol_angle: f64,
+    /// The optimization objective with weighted terms.
+    pub objective: PlanObjective,
+}
+
+impl Default for FitConfig {
+    fn default() -> Self {
+        Self {
+            max_segments: 2,
+            max_kappa: 2.0,
+            tol_pos: 0.05,
+            tol_angle: 0.05,
+            objective: PlanObjective::recommended(),
+        }
+    }
 }
 
 /// High-level planner for the per-iteration fit strategy.
@@ -94,6 +110,7 @@ pub struct DefaultPlanner<O: Optimizer> {
 }
 
 impl DefaultPlanner<NelderMead> {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             optimizer: NelderMead,
@@ -116,6 +133,7 @@ impl Default for DefaultPlanner<NelderMead> {
 }
 
 impl DefaultPlanner<CmaEs> {
+    #[must_use]
     pub fn new_cma() -> Self {
         Self {
             optimizer: CmaEs::new(DEFAULT_RNG_SEED),
@@ -170,11 +188,15 @@ impl<O: Optimizer> Planner for DefaultPlanner<O> {
 
         let start_c = *start;
         let end_c = *end;
+
+        let mut obj = config.objective.clone();
+        obj.max_kappa = config.max_kappa;
+
         let params =
             self.optimizer
-                .minimize(&|p: &[f64]| compute_error(p, n, &start_c, &end_c), &x0, 500);
+                .minimize(&|p: &[f64]| obj.compute(p, n, &start_c, &end_c), &x0, 500);
 
-        let total_err = compute_error(&params, n, start, end);
+        let total_err = obj.compute(&params, n, start, end);
         let (pos_err, angle_err) = compute_end_errors(&params, n, start, end);
 
         let path_segs = eval_path_segmented(&params, n, start, 40);
@@ -196,8 +218,7 @@ impl<O: Optimizer> Planner for DefaultPlanner<O> {
             };
             if is_better {
                 self.log.push(format!(
-                    "Found fit: n={} pos={:.3} ang={:.3}",
-                    n, pos_err, angle_err
+                    "Found fit: n={n} pos={pos_err:.3} ang={angle_err:.3}"
                 ));
                 if self.log.len() > 20 {
                     self.log.remove(0);
@@ -261,6 +282,7 @@ impl Default for FitState {
 
 impl FitState {
     /// Creates a new [`FitState`] with the default Nelder-Mead planner.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             planner: Box::new(DefaultPlanner::<NelderMead>::new()),
@@ -268,6 +290,7 @@ impl FitState {
     }
 
     /// Creates a new [`FitState`] using the CMA-ES planner.
+    #[must_use]
     pub fn cma_es() -> Self {
         Self {
             planner: Box::new(DefaultPlanner::<CmaEs>::new_cma()),
@@ -290,26 +313,31 @@ impl FitState {
         self.planner.step(start, end, config)
     }
 
+    #[must_use]
     pub fn best_fit(&self) -> Option<&PathFit> {
         self.planner.best()
     }
 
+    #[must_use]
     pub fn exploration(&self) -> Option<&PathFit> {
         self.planner.exploration()
     }
 
+    #[must_use]
     pub fn log(&self) -> &[String] {
         self.planner.log()
     }
 
+    #[must_use]
     pub fn generation(&self) -> u64 {
         self.planner.generation()
     }
 
     pub fn bump_generation(&mut self) {
-        self.planner.bump_generation()
+        self.planner.bump_generation();
     }
 
+    #[must_use]
     pub fn name(&self) -> &'static str {
         self.planner.name()
     }
