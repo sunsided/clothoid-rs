@@ -178,7 +178,7 @@ mod tests {
     use super::*;
 
     fn make_path() -> ClothoidPath {
-        use path_traits::{Heading, Path};
+        use path_traits::Path;
 
         let clothoid = crate::path_traits_impls::arc::ClothoidArc {
             start: Pose::new(2.0, 0.0, 0.0),
