@@ -19,9 +19,11 @@
 //!
 //! - **Nelder-Mead** (default) — The original simplex method. Fast per-iteration
 //!   (500 evaluations per step), good for simple paths. Created with `FitState::new()`.
+//!   Requires the `nelder-mead` feature (enabled by default).
 //! - **CMA-ES** — Covariance Matrix Adaptation Evolution Strategy. More robust on
 //!   difficult, non-convex landscapes but evaluates more candidates per generation.
 //!   Created with `FitState::cma_es()`.
+//!   Requires the `cma-es` feature (enabled by default).
 //!
 //! Both share the same `FitState` API. Press `O` in the interactive demo to toggle
 //! between them.
@@ -31,12 +33,27 @@
 //! - `fresnel` — enables high-precision Fresnel integral computation via the
 //!   external `fresnel` crate. When disabled, uses an approximation based on
 //!   auxiliary functions (Wilde 2009 / Abramowitz & Stegun).
+//! - `optimizers` (default) — enables both `nelder-mead` and `cma-es` solvers,
+//!   plus the `fit` module.
+//! - `nelder-mead` — enables the Nelder-Mead simplex optimizer and the `fit` module.
+//! - `cma-es` — enables the CMA-ES optimizer and the `fit` module.
 
+#![forbid(unsafe_code)]
+
+#[cfg(any(feature = "nelder-mead", feature = "cma-es"))]
 pub mod fit;
 pub mod optimizer;
 
+#[cfg(any(feature = "nelder-mead", feature = "cma-es"))]
 pub use fit::{DefaultPlanner, Planner};
-pub use optimizer::{CmaEs, NelderMead, Optimizer, PlanObjective, SymmetryMode};
+pub use optimizer::{PlanObjective, SymmetryMode};
+
+#[cfg(feature = "cma-es")]
+pub use optimizer::CmaEs;
+#[cfg(feature = "nelder-mead")]
+pub use optimizer::NelderMead;
+#[cfg(any(feature = "nelder-mead", feature = "cma-es"))]
+pub use optimizer::Optimizer;
 
 /// The square root of π (`√π ≈ 1.77245`).
 ///

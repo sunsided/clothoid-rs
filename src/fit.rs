@@ -3,9 +3,13 @@
 //! This module provides a stateful fitter that incrementally optimizes a path
 //! between two 2D poses using a pluggable [`Planner`] strategy.
 
+#[cfg(feature = "cma-es")]
+use crate::optimizer::CmaEs;
+#[cfg(feature = "nelder-mead")]
+use crate::optimizer::NelderMead;
 use crate::optimizer::{
-    compute_end_errors, eval_path_segmented, CmaEs, Lcg, NelderMead, Optimizer, PathSegment,
-    PlanObjective, Pose, SegmentKind, DEFAULT_RNG_SEED,
+    DEFAULT_RNG_SEED, Lcg, Optimizer, PathSegment, PlanObjective, Pose, SegmentKind,
+    compute_end_errors, eval_path_segmented,
 };
 
 /// A render-ready segment of a fitted path.
@@ -109,6 +113,7 @@ pub struct DefaultPlanner<O: Optimizer> {
     lcg: Lcg,
 }
 
+#[cfg(feature = "nelder-mead")]
 impl DefaultPlanner<NelderMead> {
     #[must_use]
     pub fn new() -> Self {
@@ -126,12 +131,14 @@ impl DefaultPlanner<NelderMead> {
     }
 }
 
+#[cfg(feature = "nelder-mead")]
 impl Default for DefaultPlanner<NelderMead> {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "cma-es")]
 impl DefaultPlanner<CmaEs> {
     #[must_use]
     pub fn new_cma() -> Self {
@@ -276,12 +283,20 @@ pub struct FitState {
 
 impl Default for FitState {
     fn default() -> Self {
-        Self::new()
+        #[cfg(feature = "nelder-mead")]
+        {
+            Self::new()
+        }
+        #[cfg(all(not(feature = "nelder-mead"), feature = "cma-es"))]
+        {
+            Self::cma_es()
+        }
     }
 }
 
 impl FitState {
     /// Creates a new [`FitState`] with the default Nelder-Mead planner.
+    #[cfg(feature = "nelder-mead")]
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -290,6 +305,7 @@ impl FitState {
     }
 
     /// Creates a new [`FitState`] using the CMA-ES planner.
+    #[cfg(feature = "cma-es")]
     #[must_use]
     pub fn cma_es() -> Self {
         Self {
@@ -334,7 +350,7 @@ impl FitState {
     }
 
     pub fn bump_generation(&mut self) {
-        self.planner.bump_generation();
+        self.planner.bump_generation()
     }
 
     #[must_use]

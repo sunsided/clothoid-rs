@@ -10,8 +10,19 @@ keywords = ["clothoid", "euler-spiral", "path-planning", "fresnel", "trajectory"
 categories = ["algorithms", "mathematics", "science::robotics"]
 
 [features]
-default = []
+default = ["optimizers"]
 fresnel = ["dep:fresnel"]
+
+# Umbrella: enables both solvers + the fit module.
+optimizers = ["nelder-mead", "cma-es"]
+
+# Individual solvers.
+nelder-mead = []
+cma-es = []
+
+[[example]]
+name = "interactive_demo"
+required-features = ["nelder-mead", "cma-es"]
 
 [dependencies]
 fresnel = { version = "0.1.0", optional = true }

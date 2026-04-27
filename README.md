@@ -5,6 +5,7 @@
 [![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-blue.svg)](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12)
 [![Rust Edition](https://img.shields.io/badge/edition-2024-dea584)](https://doc.rust-lang.org/edition-guide/)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85+-000000?logo=rust)](https://www.rust-lang.org)
+[![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 
 A Rust library for computing and fitting **Clothoids** (also known as **Euler spirals** or **Cornu spirals**). A clothoid is a curve whose curvature changes linearly with its arc length — the mathematically smooth transition between straight and curved motion, essential for autonomous vehicle path planning, railway design, and CNC toolpath generation.
 
@@ -49,7 +50,7 @@ let (exploration, best) = fitter.step(&start, &end, &config);
 The included demo opens a window where you can drag start/end poses and watch the optimizer fit a clothoid path in real time.
 
 ```bash
-cargo run --example interactive_demo
+cargo run --release --example interactive_demo
 ```
 
 ### UI Elements
