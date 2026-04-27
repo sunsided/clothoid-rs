@@ -1,7 +1,13 @@
 [package]
 name = "clothoid"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+description = "Compute and fit clothoid (Euler/Cornu spiral) curves for smooth path planning and trajectory generation"
+authors = ["Markus Mayer <widemeadows@gmail.com>"]
+license = "EUPL-1.2"
+repository = "https://github.com/sunsided/clothoid-rs"
+keywords = ["clothoid", "euler-spiral", "path-planning", "fresnel", "trajectory"]
+categories = ["algorithms", "mathematics", "science::robotics"]
 
 [features]
 default = []
