@@ -76,18 +76,18 @@ tasks:
       - run
       - demo
     cmds:
-      - "{{.CARGO}} run --example interactive_demo"
+      - "{{.CARGO}} run --release --example interactive_demo"
 
   docs:
     desc: Build rustdoc
     aliases:
       - doc
     cmds:
-      - cargo doc --no-deps --all-features
+      - "{{.CARGO}} doc --no-deps --all-features"
 
   docs:open:
     desc: Build rustdoc (and open them)
     aliases:
       - doc:open
     cmds:
-      - cargo doc --no-deps --all-features --open
+      - "{{.CARGO}} doc --no-deps --all-features --open"
