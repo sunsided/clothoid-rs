@@ -702,9 +702,7 @@ pub fn jacobi_eigen(a: &mut [f64], n: usize, e: &mut [f64], v: &mut [f64], max_i
             z[i] = 0.0;
         }
     }
-    for i in 0..n {
-        e[i] = b[i];
-    }
+    e[..n].copy_from_slice(&b[..n]);
 }
 
 // ============================================================================
@@ -752,8 +750,8 @@ impl Optimizer for CmaEs {
         let lambda = (4.0 + (3.0 * (n as f64).ln()).floor()) as usize;
         let mu = lambda / 2;
         let mut weights = vec![0.0; mu];
-        for i in 0..mu {
-            weights[i] = ((mu as f64 + 0.5).ln() - ((i + 1) as f64).ln()).max(1e-12);
+        for (i, w) in weights.iter_mut().enumerate().take(mu) {
+            *w = ((mu as f64 + 0.5).ln() - ((i + 1) as f64).ln()).max(1e-12);
         }
         let wsum: f64 = weights.iter().sum();
         for w in weights.iter_mut() {
@@ -820,8 +818,8 @@ impl Optimizer for CmaEs {
 
             for _k in 0..lambda {
                 let mut z = vec![0.0; n];
-                for i in 0..n {
-                    z[i] = randn(&mut lcg);
+                for zi in z.iter_mut().take(n) {
+                    *zi = randn(&mut lcg);
                 }
                 let mut x = m.clone();
                 for i in 0..n {
@@ -835,8 +833,8 @@ impl Optimizer for CmaEs {
                 arx.push(x);
             }
 
-            for k in 0..lambda {
-                arfitness.push(sanitize(f(&arx[k])));
+            for x in arx.iter().take(lambda) {
+                arfitness.push(sanitize(f(x)));
             }
 
             let mut idx: Vec<usize> = (0..lambda).collect();
