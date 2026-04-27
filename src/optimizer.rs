@@ -910,9 +910,9 @@ impl Optimizer for CmaEs {
 
             let chi_n = n_d.sqrt() * (1.0 - 1.0 / (4.0 * n_d) + 1.0 / (21.0 * n_d * n_d));
             let ps_norm_expected = chi_n;
-            sigma = sigma * ((cs / damps) * (ps_norm2.sqrt() / ps_norm_expected - 1.0)).exp();
+            sigma *= ((cs / damps) * (ps_norm2.sqrt() / ps_norm_expected - 1.0)).exp();
 
-            if sigma < 1e-20 || sigma > 1e20 {
+            if !(1e-20..=1e20).contains(&sigma) {
                 break;
             }
 

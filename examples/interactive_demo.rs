@@ -207,12 +207,7 @@ fn run_optimizer(shared: Arc<Mutex<SharedState>>) {
     loop {
         let (start, end, config, paused) = {
             let st = shared.lock().unwrap();
-            (
-                st.start.clone(),
-                st.end.clone(),
-                st.config.clone(),
-                st.paused,
-            )
+            (st.start, st.end, st.config.clone(), st.paused)
         };
 
         if paused {
@@ -561,7 +556,10 @@ fn draw_hud(
     );
     bl_y -= line_h;
 
-    draw_text(pixmap, bl_x, bl_y, "[R]     RESET VIEW", grey, scale);
+    draw_text(pixmap, bl_x, bl_y, "[V]     RESET VIEW", grey, scale);
+    bl_y -= line_h;
+
+    draw_text(pixmap, bl_x, bl_y, "[F]     RESTART FIT", grey, scale);
 
     // Top-right: generation and best fit
     let mut tr_y = margin;
@@ -649,7 +647,7 @@ impl App {
 
         let state = self.shared.lock().unwrap();
 
-        if let Some(ref expl) = state.fit_state.exploration() {
+        if let Some(expl) = state.fit_state.exploration() {
             draw_world_segments(
                 &mut pixmap,
                 &expl.segments,
@@ -658,7 +656,7 @@ impl App {
                 &self.camera,
             );
         }
-        if let Some(ref best) = state.fit_state.best_fit() {
+        if let Some(best) = state.fit_state.best_fit() {
             draw_world_segments(
                 &mut pixmap,
                 &best.segments,
@@ -668,8 +666,8 @@ impl App {
             );
         }
 
-        let start = state.start.clone();
-        let end = state.end.clone();
+        let start = state.start;
+        let end = state.end;
         let best_fit = state
             .fit_state
             .best_fit()
@@ -829,45 +827,47 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
 
-            WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed {
-                    match event.physical_key {
-                        PhysicalKey::Code(KeyCode::Escape) | PhysicalKey::Code(KeyCode::KeyQ) => {
-                            event_loop.exit();
-                        }
-                        PhysicalKey::Code(KeyCode::Space) => {
-                            let mut st = self.shared.lock().unwrap();
-                            st.paused = !st.paused;
-                        }
-                        PhysicalKey::Code(KeyCode::KeyO) => {
-                            let mut st = self.shared.lock().unwrap();
-                            st.toggle_optimizer();
-                        }
-                        PhysicalKey::Code(KeyCode::KeyR) => {
-                            self.camera = Camera::new();
-                        }
-                        PhysicalKey::Code(KeyCode::Equal) => {
-                            let mut st = self.shared.lock().unwrap();
-                            if st.config.max_segments < 8 {
-                                st.config.max_segments += 1;
-                            }
-                        }
-                        PhysicalKey::Code(KeyCode::Minus) => {
-                            let mut st = self.shared.lock().unwrap();
-                            if st.config.max_segments > 1 {
-                                st.config.max_segments -= 1;
-                            }
-                        }
-                        PhysicalKey::Code(KeyCode::BracketLeft) => {
-                            let mut st = self.shared.lock().unwrap();
-                            st.config.max_kappa = (st.config.max_kappa * 0.8).max(0.05);
-                        }
-                        PhysicalKey::Code(KeyCode::BracketRight) => {
-                            let mut st = self.shared.lock().unwrap();
-                            st.config.max_kappa = (st.config.max_kappa * 1.25).min(20.0);
-                        }
-                        _ => {}
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Escape) | PhysicalKey::Code(KeyCode::KeyQ) => {
+                        event_loop.exit();
                     }
+                    PhysicalKey::Code(KeyCode::Space) => {
+                        let mut st = self.shared.lock().unwrap();
+                        st.paused = !st.paused;
+                    }
+                    PhysicalKey::Code(KeyCode::KeyO) => {
+                        let mut st = self.shared.lock().unwrap();
+                        st.toggle_optimizer();
+                    }
+                    PhysicalKey::Code(KeyCode::KeyV) => {
+                        self.camera = Camera::new();
+                    }
+                    PhysicalKey::Code(KeyCode::KeyF) => {
+                        let mut st = self.shared.lock().unwrap();
+                        st.fit_state = FitState::new();
+                    }
+                    PhysicalKey::Code(KeyCode::Equal) => {
+                        let mut st = self.shared.lock().unwrap();
+                        if st.config.max_segments < 8 {
+                            st.config.max_segments += 1;
+                        }
+                    }
+                    PhysicalKey::Code(KeyCode::Minus) => {
+                        let mut st = self.shared.lock().unwrap();
+                        if st.config.max_segments > 1 {
+                            st.config.max_segments -= 1;
+                        }
+                    }
+                    PhysicalKey::Code(KeyCode::BracketLeft) => {
+                        let mut st = self.shared.lock().unwrap();
+                        st.config.max_kappa = (st.config.max_kappa * 0.8).max(0.05);
+                    }
+                    PhysicalKey::Code(KeyCode::BracketRight) => {
+                        let mut st = self.shared.lock().unwrap();
+                        st.config.max_kappa = (st.config.max_kappa * 1.25).min(20.0);
+                    }
+                    _ => {}
                 }
             }
 
