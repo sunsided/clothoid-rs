@@ -550,7 +550,7 @@ fn draw_hud(
 ) -> (f32, f32) {
     let w = pixmap.width() as f32;
     let h = pixmap.height() as f32;
-    let scale = 2.0f32;
+    let scale = 1.5f32;
     let line_h = 7.0 * scale + 2.0;
     let grey = Color::from_rgba8(200, 200, 200, 255);
     let dim_grey = Color::from_rgba8(150, 150, 150, 255);
@@ -615,9 +615,10 @@ fn draw_hud(
     // Top-right: generation and best fit
     let mut tr_y = margin;
 
+    let right_pad = 30.0f32;
     let gen_text = format!("GEN: {generation}");
     let gen_w = font::text_width(&gen_text, scale as u32);
-    let gen_x = w - margin - gen_w as f32;
+    let gen_x = w - right_pad - gen_w as f32;
     draw_text(pixmap, gen_x, tr_y, &gen_text, grey, scale);
     tr_y += line_h;
 
@@ -628,7 +629,7 @@ fn draw_hud(
         None => "BEST FIT: -".to_string(),
     };
     let fit_w = font::text_width(&fit_text, scale as u32);
-    let fit_x = w - margin - fit_w as f32;
+    let fit_x = w - right_pad - fit_w as f32;
     draw_text(pixmap, fit_x, tr_y, &fit_text, grey, scale);
 
     // Bottom-right: log tail (last 3 entries)
@@ -636,7 +637,7 @@ fn draw_hud(
     for i in 0..log_count {
         let entry = &log_tail[log_tail.len() - log_count + i];
         let log_w = font::text_width(entry, scale as u32);
-        let log_x = w - margin - log_w as f32;
+        let log_x = w - right_pad - log_w as f32;
         let log_y = h - margin - (log_count as f32 - i as f32) * line_h;
         draw_text(pixmap, log_x, log_y, entry, dim_grey, scale);
     }
