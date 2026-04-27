@@ -10,7 +10,7 @@ keywords = ["clothoid", "euler-spiral", "path-planning", "fresnel", "trajectory"
 categories = ["algorithms", "mathematics", "science::robotics"]
 
 [features]
-default = ["optimizers"]
+default = ["optimizers", "path-traits"]
 fresnel = ["dep:fresnel"]
 
 # Umbrella: enables both solvers + the fit module.
@@ -20,12 +20,20 @@ optimizers = ["nelder-mead", "cma-es"]
 nelder-mead = []
 cma-es = []
 
+# path-traits integration: exposes ClothoidArc, LinearSegment, ClothoidPath
+# as first-class path_traits::Path implementations.
+path-traits = ["dep:path-traits"]
+
 [[example]]
 name = "interactive_demo"
 required-features = ["nelder-mead", "cma-es"]
 
 [dependencies]
 fresnel = { version = "0.1.0", optional = true }
+path-traits = { git = "https://github.com/sunsided/path-traits", rev = "3d43fc9", optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dev-dependencies]
 assert_float_eq = "1.1.3"

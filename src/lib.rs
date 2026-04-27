@@ -28,6 +28,44 @@
 //! Both share the same `FitState` API. Press `O` in the interactive demo to toggle
 //! between them.
 //!
+//! ## Path Traits
+//!
+//! When the `path-traits` feature is enabled (default), the crate provides
+//! [`ClothoidArc`], [`LinearSegment`], [`ClothoidPath`], and [`Vec2`] implementing
+//! the [`path_traits`](https://crates.io/crates/path-traits) hierarchy. This allows
+//! downstream crates to treat clothoid paths generically via traits such as
+//! `Path`, `SegmentedPath`, `Tangent`, `Heading`, `Curved`, `FrenetFrame`, and
+//! `Project`.
+//!
+//! ```
+//! use clothoid::ClothoidArc;
+//! use clothoid::optimizer::Pose;
+//! use path_traits::{Path, Heading, Curved};
+//!
+//! let arc = ClothoidArc {
+//!     start: Pose::new(0.0, 0.0, 0.0),
+//!     ks: 0.0,
+//!     ke: 1.0,
+//!     length: 5.0,
+//!     n_steps: 256,
+//! };
+//!
+//! let pt = arc.sample_at(2.5).unwrap();
+//! let heading = arc.heading_at(2.5).unwrap();
+//! let curvature = arc.curvature_at(2.5).unwrap();
+//! ```
+//!
+//! Use [`Clothoid::into_arc`] to convert a `Clothoid` into a bounded arc:
+//!
+//! ```
+//! use clothoid::Clothoid;
+//! use path_traits::Path;
+//!
+//! let c = Clothoid::new(2.0);
+//! let arc = c.into_arc(4.0);
+//! assert!((arc.length() - 4.0).abs() < 1e-10);
+//! ```
+//!
 //! ## Features
 //!
 //! - `fresnel` — enables high-precision Fresnel integral computation via the
@@ -37,23 +75,38 @@
 //!   plus the `fit` module.
 //! - `nelder-mead` — enables the Nelder-Mead simplex optimizer and the `fit` module.
 //! - `cma-es` — enables the CMA-ES optimizer and the `fit` module.
+//! - `path-traits` (default) — enables `path_traits` integration with
+//!   [`ClothoidArc`], [`LinearSegment`], [`ClothoidPath`], and [`Vec2`].
 
 #![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(any(feature = "nelder-mead", feature = "cma-es"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "nelder-mead", feature = "cma-es"))))]
 pub mod fit;
 pub mod optimizer;
 
 #[cfg(any(feature = "nelder-mead", feature = "cma-es"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "nelder-mead", feature = "cma-es"))))]
 pub use fit::{DefaultPlanner, Planner};
 pub use optimizer::{PlanObjective, SymmetryMode};
 
 #[cfg(feature = "cma-es")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]
 pub use optimizer::CmaEs;
 #[cfg(feature = "nelder-mead")]
+#[cfg_attr(docsrs, doc(cfg(feature = "nelder-mead")))]
 pub use optimizer::NelderMead;
 #[cfg(any(feature = "nelder-mead", feature = "cma-es"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "nelder-mead", feature = "cma-es"))))]
 pub use optimizer::Optimizer;
+
+#[cfg(feature = "path-traits")]
+#[cfg_attr(docsrs, doc(cfg(feature = "path-traits")))]
+pub mod path_traits_impls;
+#[cfg(feature = "path-traits")]
+#[cfg_attr(docsrs, doc(cfg(feature = "path-traits")))]
+pub use path_traits_impls::{ArcSegment, ClothoidArc, ClothoidPath, LinearSegment, Vec2};
 
 /// The square root of π (`√π ≈ 1.77245`).
 ///
@@ -165,6 +218,7 @@ impl Clothoid {
     ///
     /// A [`Point2`] on the clothoid curve.
     #[cfg(feature = "fresnel")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "fresnel")))]
     fn calculate_fresnl(&self, t: f64) -> Point2 {
         let (s, c) = fresnel::fresnl(t * INV_PI_SQRT);
         Point2 {
@@ -191,6 +245,34 @@ impl Clothoid {
         Point2 {
             x: self.a * PI_SQRT * fsc.sin,
             y: self.a * PI_SQRT * fsc.cos,
+        }
+    }
+
+    /// Converts this `Clothoid` into a bounded [`ClothoidArc`] of the given length.
+    ///
+    /// The arc starts at the origin `(0, 0, 0)` with `ks = 0.0` and
+    /// `ke = length / (a * a)`, matching the crate's convention that
+    /// `direction_angle(s) = s² / (2a²)` so that `κ(s) = dθ/ds = s / a²`.
+    ///
+    /// # Arguments
+    ///
+    /// * `length` — The arc-length of the resulting bounded segment.
+    ///
+    /// # Returns
+    ///
+    /// A [`ClothoidArc`] implementing `path_traits::Path`.
+    ///
+    /// This method requires the `path-traits` feature.
+    #[cfg(feature = "path-traits")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "path-traits")))]
+    #[must_use]
+    pub fn into_arc(self, length: f64) -> ClothoidArc {
+        ClothoidArc {
+            start: crate::optimizer::Pose::new(0.0, 0.0, 0.0),
+            ks: 0.0,
+            ke: length / (self.a * self.a),
+            length,
+            n_steps: 256,
         }
     }
 }
