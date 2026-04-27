@@ -156,19 +156,20 @@ impl SegmentedPath for ClothoidPath {
         }
 
         let n = self.segments.len();
-        for i in 0..n {
-            let seg_start = self.prefix[i];
-            let seg_end = self.prefix[i + 1];
-            let eps = if i == n - 1 { 1e-9 } else { 0.0 };
-            if s >= seg_start && (s <= seg_end + eps) {
-                let local_s = (s - seg_start)
-                    .max(0.0)
-                    .min(self.segments[i].segment_length());
-                return Ok((i, local_s));
-            }
+        if n == 0 {
+            return Err(PathError::out_of_domain(s, self.domain()));
         }
 
-        Err(PathError::out_of_domain(s, self.domain()))
+        let idx = if s == total {
+            n - 1
+        } else {
+            self.prefix.partition_point(|&p| p <= s).saturating_sub(1)
+        };
+        let seg_start = self.prefix[idx];
+        let local_s = (s - seg_start)
+            .max(0.0)
+            .min(self.segments[idx].segment_length());
+        Ok((idx, local_s))
     }
 }
 
@@ -177,20 +178,27 @@ mod tests {
     use super::*;
 
     fn make_path() -> ClothoidPath {
+        use path_traits::{Heading, Path};
+
+        let clothoid = crate::path_traits_impls::arc::ClothoidArc {
+            start: Pose::new(2.0, 0.0, 0.0),
+            ks: 0.0,
+            ke: 1.0,
+            length: 3.0,
+            n_steps: 64,
+        };
+        let clothoid_end_pos = clothoid.sample_at(clothoid.length).unwrap();
+        let clothoid_end_angle = clothoid.heading_at_s(clothoid.length);
+        let clothoid_end = Pose::new(clothoid_end_pos.x, clothoid_end_pos.y, clothoid_end_angle);
+
         let segs = vec![
             ArcSegment::Linear(crate::path_traits_impls::linear::LinearSegment {
                 start: Pose::new(0.0, 0.0, 0.0),
                 length: 2.0,
             }),
-            ArcSegment::Clothoid(crate::path_traits_impls::arc::ClothoidArc {
-                start: Pose::new(2.0, 0.0, 0.0),
-                ks: 0.0,
-                ke: 1.0,
-                length: 3.0,
-                n_steps: 64,
-            }),
+            ArcSegment::Clothoid(clothoid),
             ArcSegment::Linear(crate::path_traits_impls::linear::LinearSegment {
-                start: Pose::new(0.0, 0.0, 0.0),
+                start: clothoid_end,
                 length: 1.0,
             }),
         ];
