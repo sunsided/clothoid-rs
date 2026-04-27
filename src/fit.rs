@@ -2,7 +2,6 @@
 //!
 //! This module provides a stateful fitter that incrementally optimizes a path
 //! between two 2D poses using a pluggable [`Planner`] strategy.
-#![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(feature = "cma-es")]
 #[cfg_attr(docsrs, doc(cfg(feature = "cma-es")))]

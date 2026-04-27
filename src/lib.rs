@@ -37,34 +37,46 @@
 //! `Path`, `SegmentedPath`, `Tangent`, `Heading`, `Curved`, `FrenetFrame`, and
 //! `Project`.
 //!
-//! ```
-//! use clothoid::ClothoidArc;
-//! use clothoid::optimizer::Pose;
-//! use path_traits::{Path, Heading, Curved};
-//!
-//! let arc = ClothoidArc {
-//!     start: Pose::new(0.0, 0.0, 0.0),
-//!     ks: 0.0,
-//!     ke: 1.0,
-//!     length: 5.0,
-//!     n_steps: 256,
-//! };
-//!
-//! let pt = arc.sample_at(2.5).unwrap();
-//! let heading = arc.heading_at(2.5).unwrap();
-//! let curvature = arc.curvature_at(2.5).unwrap();
-//! ```
+#![cfg_attr(feature = "path-traits", doc = "```")]
+#![cfg_attr(feature = "path-traits", doc = "use clothoid::ClothoidArc;")]
+#![cfg_attr(feature = "path-traits", doc = "use clothoid::optimizer::Pose;")]
+#![cfg_attr(
+    feature = "path-traits",
+    doc = "use path_traits::{Path, Heading, Curved};"
+)]
+#![cfg_attr(feature = "path-traits", doc = "")]
+#![cfg_attr(feature = "path-traits", doc = "let arc = ClothoidArc {")]
+#![cfg_attr(feature = "path-traits", doc = "    start: Pose::new(0.0, 0.0, 0.0),")]
+#![cfg_attr(feature = "path-traits", doc = "    ks: 0.0,")]
+#![cfg_attr(feature = "path-traits", doc = "    ke: 1.0,")]
+#![cfg_attr(feature = "path-traits", doc = "    length: 5.0,")]
+#![cfg_attr(feature = "path-traits", doc = "    n_steps: 256,")]
+#![cfg_attr(feature = "path-traits", doc = "};")]
+#![cfg_attr(feature = "path-traits", doc = "")]
+#![cfg_attr(feature = "path-traits", doc = "let pt = arc.sample_at(2.5).unwrap();")]
+#![cfg_attr(
+    feature = "path-traits",
+    doc = "let heading = arc.heading_at(2.5).unwrap();"
+)]
+#![cfg_attr(
+    feature = "path-traits",
+    doc = "let curvature = arc.curvature_at(2.5).unwrap();"
+)]
+#![cfg_attr(feature = "path-traits", doc = "```")]
 //!
 //! Use [`Clothoid::into_arc`] to convert a `Clothoid` into a bounded arc:
 //!
-//! ```
-//! use clothoid::Clothoid;
-//! use path_traits::Path;
-//!
-//! let c = Clothoid::new(2.0);
-//! let arc = c.into_arc(4.0);
-//! assert!((arc.length() - 4.0).abs() < 1e-10);
-//! ```
+#![cfg_attr(feature = "path-traits", doc = "```")]
+#![cfg_attr(feature = "path-traits", doc = "use clothoid::Clothoid;")]
+#![cfg_attr(feature = "path-traits", doc = "use path_traits::Path;")]
+#![cfg_attr(feature = "path-traits", doc = "")]
+#![cfg_attr(feature = "path-traits", doc = "let c = Clothoid::new(2.0);")]
+#![cfg_attr(feature = "path-traits", doc = "let arc = c.into_arc(4.0);")]
+#![cfg_attr(
+    feature = "path-traits",
+    doc = "assert!((arc.length() - 4.0).abs() < 1e-10);"
+)]
+#![cfg_attr(feature = "path-traits", doc = "```")]
 //!
 //! ## Features
 //!
