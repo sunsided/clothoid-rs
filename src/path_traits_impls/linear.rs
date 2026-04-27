@@ -34,7 +34,7 @@ impl LinearSegment {
 
 impl Path for LinearSegment {
     type Point = crate::Point2;
-    type Error = PathError;
+    type Error = PathError<f64>;
     type Scalar = f64;
 
     fn length(&self) -> f64 {
@@ -43,7 +43,7 @@ impl Path for LinearSegment {
 
     fn sample_at(&self, s: f64) -> Result<Self::Point, Self::Error> {
         if s < 0.0 || s > self.length {
-            return Err(PathError::OutOfDomain);
+            return Err(PathError::out_of_domain(s, self.domain()));
         }
         let (x, y, _) = self.state_at(s);
         Ok(crate::Point2 { x, y })
@@ -53,7 +53,7 @@ impl Path for LinearSegment {
 impl ParametricPath for LinearSegment {
     fn sample_t(&self, t: f64) -> Result<Self::Point, Self::Error> {
         if !(0.0..=1.0).contains(&t) {
-            return Err(PathError::OutOfDomain);
+            return Err(PathError::out_of_domain(t, 0.0..=1.0));
         }
         self.sample_at(t * self.length)
     }
@@ -62,7 +62,7 @@ impl ParametricPath for LinearSegment {
 impl Tangent for LinearSegment {
     fn tangent_at(&self, s: f64) -> Result<<Self::Point as Point>::Vector, Self::Error> {
         if s < 0.0 || s > self.length {
-            return Err(PathError::OutOfDomain);
+            return Err(PathError::out_of_domain(s, self.domain()));
         }
         let theta = self.start.angle;
         Ok(Vec2::new(theta.cos(), theta.sin()))
@@ -72,7 +72,7 @@ impl Tangent for LinearSegment {
 impl Heading for LinearSegment {
     fn heading_at(&self, s: f64) -> Result<f64, Self::Error> {
         if s < 0.0 || s > self.length {
-            return Err(PathError::OutOfDomain);
+            return Err(PathError::out_of_domain(s, self.domain()));
         }
         Ok(self.start.angle)
     }
@@ -83,7 +83,7 @@ impl Curved for LinearSegment {
 
     fn curvature_at(&self, s: f64) -> Result<Self::Curvature, Self::Error> {
         if s < 0.0 || s > self.length {
-            return Err(PathError::OutOfDomain);
+            return Err(PathError::out_of_domain(s, self.domain()));
         }
         Ok(0.0)
     }
@@ -151,7 +151,9 @@ mod tests {
         assert!(seg.sample_at(-0.1).is_err());
         assert!(seg.sample_at(10.1).is_err());
         let err = seg.sample_at(-0.1).unwrap_err();
-        assert_eq!(err, PathError::OutOfDomain);
+        assert!(
+            matches!(err, PathError::OutOfDomain { param, domain } if (param - -0.1).abs() < 1e-10 && *domain.start() == 0.0 && (*domain.end() - 10.0).abs() < 1e-10)
+        );
     }
 
     #[test]

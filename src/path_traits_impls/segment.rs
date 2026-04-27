@@ -33,7 +33,7 @@ impl ArcSegment {
 
 impl Path for ArcSegment {
     type Point = crate::Point2;
-    type Error = PathError;
+    type Error = PathError<f64>;
     type Scalar = f64;
 
     fn length(&self) -> f64 {

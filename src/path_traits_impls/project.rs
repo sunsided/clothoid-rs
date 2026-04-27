@@ -13,10 +13,10 @@ pub(crate) fn coarse_project(
     arc: &crate::path_traits_impls::arc::ClothoidArc,
     query: crate::Point2,
     n_steps: usize,
-) -> Result<(f64, f64, f64, f64), PathError> {
+) -> Result<(f64, f64, f64, f64), PathError<f64>> {
     let length = arc.length;
     if length <= 0.0 {
-        return Err(PathError::Degenerate);
+        return Err(PathError::degenerate("zero-length arc"));
     }
 
     let mut best_s = 0.0;
@@ -50,7 +50,7 @@ pub(crate) fn golden_section_refine(
     s_lo: f64,
     s_hi: f64,
     tol: f64,
-) -> Result<(f64, f64), PathError> {
+) -> Result<(f64, f64), PathError<f64>> {
     let gr = (3.0 - 5.0_f64.sqrt()) / 2.0;
 
     let mut a = s_lo;

@@ -112,7 +112,7 @@ impl ClothoidPath {
 
 impl Path for ClothoidPath {
     type Point = crate::Point2;
-    type Error = PathError;
+    type Error = PathError<f64>;
     type Scalar = f64;
 
     fn length(&self) -> f64 {
@@ -122,7 +122,7 @@ impl Path for ClothoidPath {
     fn sample_at(&self, s: f64) -> Result<Self::Point, Self::Error> {
         let total = self.length();
         if s < 0.0 || s > total {
-            return Err(PathError::OutOfDomain);
+            return Err(PathError::out_of_domain(s, self.domain()));
         }
         let (idx, local_s) = self.locate(s)?;
         self.segments[idx].sample_at(local_s)
@@ -132,7 +132,7 @@ impl Path for ClothoidPath {
 impl ParametricPath for ClothoidPath {
     fn sample_t(&self, t: f64) -> Result<Self::Point, Self::Error> {
         if !(0.0..=1.0).contains(&t) {
-            return Err(PathError::OutOfDomain);
+            return Err(PathError::out_of_domain(t, 0.0..=1.0));
         }
         self.sample_at(t * self.length())
     }
@@ -152,7 +152,7 @@ impl SegmentedPath for ClothoidPath {
     fn locate(&self, s: f64) -> Result<(usize, f64), Self::Error> {
         let total = self.length();
         if s < 0.0 || s > total {
-            return Err(PathError::OutOfDomain);
+            return Err(PathError::out_of_domain(s, self.domain()));
         }
 
         let n = self.segments.len();
@@ -168,7 +168,7 @@ impl SegmentedPath for ClothoidPath {
             }
         }
 
-        Err(PathError::OutOfDomain)
+        Err(PathError::out_of_domain(s, self.domain()))
     }
 }
 
