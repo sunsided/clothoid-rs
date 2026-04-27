@@ -13,6 +13,19 @@
 //! let angle = clothoid.direction_angle(0.5);
 //! ```
 //!
+//! ## Choosing an Optimizer
+//!
+//! The `FitState` supports two derivative-free optimizers for path fitting:
+//!
+//! - **Nelder-Mead** (default) — The original simplex method. Fast per-iteration
+//!   (500 evaluations per step), good for simple paths. Created with `FitState::new()`.
+//! - **CMA-ES** — Covariance Matrix Adaptation Evolution Strategy. More robust on
+//!   difficult, non-convex landscapes but evaluates more candidates per generation.
+//!   Created with `FitState::cma_es()`.
+//!
+//! Both share the same `FitState` API. Press `O` in the interactive demo to toggle
+//! between them.
+//!
 //! ## Features
 //!
 //! - `fresnel` — enables high-precision Fresnel integral computation via the
@@ -21,6 +34,9 @@
 
 pub mod fit;
 pub mod optimizer;
+
+pub use fit::{DefaultPlanner, Planner};
+pub use optimizer::{CmaEs, NelderMead, Optimizer};
 
 /// The square root of π (`√π ≈ 1.77245`).
 ///

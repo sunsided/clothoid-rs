@@ -1,18 +1,14 @@
 //! Incremental path fitting using clothoid segments.
 //!
 //! This module provides a stateful fitter that incrementally optimizes a path
-//! between two 2D poses using the Nelder-Mead optimizer. It supports multi-segment
-//! paths with automatic restart and complexity escalation.
+//! between two 2D poses using a pluggable [`Planner`] strategy.
 
 use crate::optimizer::{
-    compute_end_errors, compute_error, eval_path_segmented, nelder_mead, Lcg, PathSegment, Pose,
-    SegmentKind,
+    compute_end_errors, compute_error, eval_path_segmented, CmaEs, Lcg, NelderMead, Optimizer,
+    PathSegment, Pose, SegmentKind, DEFAULT_RNG_SEED,
 };
 
 /// A render-ready segment of a fitted path.
-///
-/// Contains the segment type, 2D points (as `f32` for rendering), and the
-/// boundary heading angle.
 #[derive(Clone)]
 pub struct RenderSegment {
     /// The kind of this segment (linear or curve).
@@ -36,7 +32,7 @@ impl From<&PathSegment> for RenderSegment {
 /// A complete fit result describing a path between two poses.
 #[derive(Clone)]
 pub struct PathFit {
-    /// The flat parameter vector describing the path (see [`crate::optimizer::eval_path`]).
+    /// The flat parameter vector describing the path.
     pub params: Vec<f64>,
     /// The number of clothoid segments in this path.
     pub n_clothoids: usize,
@@ -63,33 +59,44 @@ pub struct FitConfig {
     pub tol_angle: f64,
 }
 
-/// Stateful incremental clothoid path fitter.
+/// High-level planner for the per-iteration fit strategy.
+pub trait Planner: Send {
+    /// One outer fit iteration. Returns `(exploration, best_fit)`.
+    fn step(
+        &mut self,
+        start: &Pose,
+        end: &Pose,
+        config: &FitConfig,
+    ) -> (Option<PathFit>, Option<PathFit>);
+
+    fn bump_generation(&mut self);
+    fn generation(&self) -> u64;
+    fn log(&self) -> &[String];
+    fn best(&self) -> Option<&PathFit>;
+    fn exploration(&self) -> Option<&PathFit>;
+    fn name(&self) -> &'static str;
+}
+
+/// Default planner implementation that wraps any [`Optimizer`].
 ///
-/// Maintains exploration and best-fit solutions across generations.
-/// Automatically increases segment count if the current complexity fails
-/// to produce a solution within tolerance after 200 iterations.
-pub struct FitState {
-    /// The best fit found so far that meets the tolerance criteria.
-    pub best_fit: Option<PathFit>,
-    /// The most recent exploration result (may not meet tolerances).
-    pub exploration: Option<PathFit>,
-    /// A rolling log of recent fit messages (capped at 20 entries).
-    pub log: Vec<String>,
-    /// The current generation counter.
+/// Carries the restart + segment-escalation heuristic and delegates the inner
+/// minimization to the given optimizer.
+pub struct DefaultPlanner<O: Optimizer> {
+    optimizer: O,
+    best_fit: Option<PathFit>,
+    exploration: Option<PathFit>,
+    log: Vec<String>,
     generation: u64,
-    /// The generation at which the last reset occurred.
     last_gen: u64,
-    /// The current number of clothoid segments being tried.
     n_clothoids: usize,
-    /// The number of iterations since the last segment count change.
     restart_count: usize,
-    /// The random number generator for parameter initialization.
     lcg: Lcg,
 }
 
-impl Default for FitState {
-    fn default() -> Self {
+impl DefaultPlanner<NelderMead> {
+    pub fn new() -> Self {
         Self {
+            optimizer: NelderMead,
             best_fit: None,
             exploration: None,
             log: Vec::new(),
@@ -97,53 +104,35 @@ impl Default for FitState {
             last_gen: u64::MAX,
             n_clothoids: 1,
             restart_count: 0,
-            lcg: Lcg::new(crate::optimizer::DEFAULT_RNG_SEED),
+            lcg: Lcg::new(DEFAULT_RNG_SEED),
         }
     }
 }
 
-impl FitState {
-    /// Creates a new [`FitState`] with default settings.
-    ///
-    /// The fitter starts with 1 clothoid segments, generation 0, and uses
-    /// the default RNG seed for reproducible parameter initialization.
-    pub fn new() -> Self {
-        Self::default()
+impl Default for DefaultPlanner<NelderMead> {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    /// Returns the current generation counter.
-    pub fn generation(&self) -> u64 {
-        self.generation
+impl DefaultPlanner<CmaEs> {
+    pub fn new_cma() -> Self {
+        Self {
+            optimizer: CmaEs::new(DEFAULT_RNG_SEED),
+            best_fit: None,
+            exploration: None,
+            log: Vec::new(),
+            generation: 0,
+            last_gen: u64::MAX,
+            n_clothoids: 1,
+            restart_count: 0,
+            lcg: Lcg::new(DEFAULT_RNG_SEED),
+        }
     }
+}
 
-    /// Increments the generation counter.
-    ///
-    /// On the next [`step`](FitState::step) call, if the generation has changed,
-    /// the fitter will reset to 1 clothoid segment and clear previous results.
-    pub fn bump_generation(&mut self) {
-        self.generation += 1;
-    }
-
-    /// Runs one optimization iteration.
-    ///
-    /// Generates random initial parameters, runs the Nelder-Mead optimizer
-    /// for 500 iterations, and evaluates the result. If the result meets the
-    /// tolerance criteria and is better than the current best, it is stored.
-    ///
-    /// After 200 iterations without success, the segment count is increased
-    /// (up to `max_segments`), or reset to 1 if already at maximum.
-    ///
-    /// # Arguments
-    ///
-    /// * `start` — The starting pose.
-    /// * `end` — The target pose.
-    /// * `config` — Fitting configuration (tolerances, limits).
-    ///
-    /// # Returns
-    ///
-    /// A tuple of `(exploration, best_fit)`, where `exploration` is the most
-    /// recent result and `best_fit` is the best valid fit found so far.
-    pub fn step(
+impl<O: Optimizer> Planner for DefaultPlanner<O> {
+    fn step(
         &mut self,
         start: &Pose,
         end: &Pose,
@@ -181,7 +170,9 @@ impl FitState {
 
         let start_c = *start;
         let end_c = *end;
-        let params = nelder_mead(&|p: &[f64]| compute_error(p, n, &start_c, &end_c), &x0, 500);
+        let params =
+            self.optimizer
+                .minimize(&|p: &[f64]| compute_error(p, n, &start_c, &end_c), &x0, 500);
 
         let total_err = compute_error(&params, n, start, end);
         let (pos_err, angle_err) = compute_end_errors(&params, n, start, end);
@@ -228,5 +219,98 @@ impl FitState {
         }
 
         (self.exploration.clone(), self.best_fit.clone())
+    }
+
+    fn bump_generation(&mut self) {
+        self.generation += 1;
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn log(&self) -> &[String] {
+        &self.log
+    }
+
+    fn best(&self) -> Option<&PathFit> {
+        self.best_fit.as_ref()
+    }
+
+    fn exploration(&self) -> Option<&PathFit> {
+        self.exploration.as_ref()
+    }
+
+    fn name(&self) -> &'static str {
+        self.optimizer.name()
+    }
+}
+
+/// Stateful incremental clothoid path fitter.
+///
+/// Maintains exploration and best-fit solutions across generations.
+pub struct FitState {
+    planner: Box<dyn Planner>,
+}
+
+impl Default for FitState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FitState {
+    /// Creates a new [`FitState`] with the default Nelder-Mead planner.
+    pub fn new() -> Self {
+        Self {
+            planner: Box::new(DefaultPlanner::<NelderMead>::new()),
+        }
+    }
+
+    /// Creates a new [`FitState`] using the CMA-ES planner.
+    pub fn cma_es() -> Self {
+        Self {
+            planner: Box::new(DefaultPlanner::<CmaEs>::new_cma()),
+        }
+    }
+
+    /// Creates a new [`FitState`] with an arbitrary planner.
+    pub fn with_planner<P: Planner + 'static>(planner: P) -> Self {
+        Self {
+            planner: Box::new(planner),
+        }
+    }
+
+    pub fn step(
+        &mut self,
+        start: &Pose,
+        end: &Pose,
+        config: &FitConfig,
+    ) -> (Option<PathFit>, Option<PathFit>) {
+        self.planner.step(start, end, config)
+    }
+
+    pub fn best_fit(&self) -> Option<&PathFit> {
+        self.planner.best()
+    }
+
+    pub fn exploration(&self) -> Option<&PathFit> {
+        self.planner.exploration()
+    }
+
+    pub fn log(&self) -> &[String] {
+        self.planner.log()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.planner.generation()
+    }
+
+    pub fn bump_generation(&mut self) {
+        self.planner.bump_generation()
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.planner.name()
     }
 }

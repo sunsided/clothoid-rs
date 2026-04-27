@@ -18,6 +18,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+enum OptimizerMode {
+    NelderMead,
+    CmaEs,
+}
+
 // ============================================================================
 // Shared state
 // ============================================================================
@@ -28,6 +33,7 @@ struct SharedState {
     fit_state: FitState,
     config: FitConfig,
     paused: bool,
+    optimizer_mode: OptimizerMode,
 }
 
 impl SharedState {
@@ -51,7 +57,26 @@ impl SharedState {
                 tol_angle: 0.05,
             },
             paused: false,
+            optimizer_mode: OptimizerMode::NelderMead,
         }
+    }
+
+    fn optimizer_name(&self) -> &'static str {
+        match self.optimizer_mode {
+            OptimizerMode::NelderMead => "Nelder-Mead",
+            OptimizerMode::CmaEs => "CMA-ES",
+        }
+    }
+
+    fn toggle_optimizer(&mut self) {
+        self.optimizer_mode = match self.optimizer_mode {
+            OptimizerMode::NelderMead => OptimizerMode::CmaEs,
+            OptimizerMode::CmaEs => OptimizerMode::NelderMead,
+        };
+        self.fit_state = match self.optimizer_mode {
+            OptimizerMode::NelderMead => FitState::new(),
+            OptimizerMode::CmaEs => FitState::cma_es(),
+        };
     }
 }
 
@@ -340,6 +365,7 @@ fn draw_hud(
     max_kappa: f64,
     best_fit_exists: bool,
     paused: bool,
+    optimizer_name: &str,
 ) {
     let w = pixmap.width() as f32;
     let h = pixmap.height() as f32;
@@ -396,6 +422,13 @@ fn draw_hud(
             Color::from_rgba8(200, 50, 50, 255),
         );
     }
+
+    let opt_color = if optimizer_name == "CMA-ES" {
+        Color::from_rgba8(180, 100, 220, 255)
+    } else {
+        Color::from_rgba8(100, 180, 220, 255)
+    };
+    fill_rect_solid(pixmap, w - 35.0, 80.0, 25.0, 25.0, opt_color);
 }
 
 // ============================================================================
@@ -451,7 +484,7 @@ impl App {
 
         let state = self.shared.lock().unwrap();
 
-        if let Some(ref expl) = state.fit_state.exploration {
+        if let Some(ref expl) = state.fit_state.exploration() {
             draw_world_segments(
                 &mut pixmap,
                 &expl.segments,
@@ -460,7 +493,7 @@ impl App {
                 &self.camera,
             );
         }
-        if let Some(ref best) = state.fit_state.best_fit {
+        if let Some(ref best) = state.fit_state.best_fit() {
             draw_world_segments(
                 &mut pixmap,
                 &best.segments,
@@ -476,8 +509,9 @@ impl App {
             &mut pixmap,
             state.config.max_segments,
             state.config.max_kappa,
-            state.fit_state.best_fit.is_some(),
+            state.fit_state.best_fit().is_some(),
             state.paused,
+            state.optimizer_name(),
         );
         drop(state);
 
@@ -623,6 +657,10 @@ impl ApplicationHandler for App {
                         PhysicalKey::Code(KeyCode::Space) => {
                             let mut st = self.shared.lock().unwrap();
                             st.paused = !st.paused;
+                        }
+                        PhysicalKey::Code(KeyCode::KeyO) => {
+                            let mut st = self.shared.lock().unwrap();
+                            st.toggle_optimizer();
                         }
                         PhysicalKey::Code(KeyCode::KeyR) => {
                             self.camera = Camera::new();
