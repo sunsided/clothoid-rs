@@ -36,6 +36,9 @@ impl ClothoidArc {
     #[inline]
     #[must_use]
     pub fn heading_at_s(&self, s: f64) -> f64 {
+        if self.length == 0.0 {
+            return self.start.angle;
+        }
         let dk = self.ke - self.ks;
         self.start.angle + self.ks * s + 0.5 * dk * s * s / self.length
     }
@@ -44,6 +47,9 @@ impl ClothoidArc {
     #[inline]
     #[must_use]
     pub fn curvature_at_s(&self, s: f64) -> f64 {
+        if self.length == 0.0 {
+            return self.ks;
+        }
         self.ks + (self.ke - self.ks) * s / self.length
     }
 
@@ -86,6 +92,9 @@ impl Path for ClothoidArc {
     }
 
     fn sample_at(&self, s: f64) -> Result<Self::Point, Self::Error> {
+        if self.length <= 0.0 {
+            return Err(PathError::degenerate("zero-length clothoid arc"));
+        }
         if s < 0.0 || s > self.length {
             return Err(PathError::out_of_domain(s, self.domain()));
         }
@@ -96,6 +105,9 @@ impl Path for ClothoidArc {
 
 impl ParametricPath for ClothoidArc {
     fn sample_t(&self, t: f64) -> Result<Self::Point, Self::Error> {
+        if self.length <= 0.0 {
+            return Err(PathError::degenerate("zero-length clothoid arc"));
+        }
         if !(0.0..=1.0).contains(&t) {
             return Err(PathError::out_of_domain(t, 0.0..=1.0));
         }
@@ -105,6 +117,9 @@ impl ParametricPath for ClothoidArc {
 
 impl Tangent for ClothoidArc {
     fn tangent_at(&self, s: f64) -> Result<<Self::Point as Point>::Vector, Self::Error> {
+        if self.length <= 0.0 {
+            return Err(PathError::degenerate("zero-length clothoid arc"));
+        }
         if s < 0.0 || s > self.length {
             return Err(PathError::out_of_domain(s, self.domain()));
         }
@@ -115,6 +130,9 @@ impl Tangent for ClothoidArc {
 
 impl Heading for ClothoidArc {
     fn heading_at(&self, s: f64) -> Result<f64, Self::Error> {
+        if self.length <= 0.0 {
+            return Err(PathError::degenerate("zero-length clothoid arc"));
+        }
         if s < 0.0 || s > self.length {
             return Err(PathError::out_of_domain(s, self.domain()));
         }
@@ -126,6 +144,9 @@ impl Curved for ClothoidArc {
     type Curvature = f64;
 
     fn curvature_at(&self, s: f64) -> Result<Self::Curvature, Self::Error> {
+        if self.length <= 0.0 {
+            return Err(PathError::degenerate("zero-length clothoid arc"));
+        }
         if s < 0.0 || s > self.length {
             return Err(PathError::out_of_domain(s, self.domain()));
         }
@@ -147,6 +168,9 @@ impl Project for ClothoidArc {
     fn project(&self, p: Self::Point) -> Result<f64, Self::Error> {
         if self.length <= 0.0 {
             return Err(PathError::degenerate("zero-length clothoid arc"));
+        }
+        if self.n_steps == 0 {
+            return Err(PathError::degenerate("n_steps must be > 0"));
         }
 
         let (_best_s, _, bucket_lo, bucket_hi) = coarse_project(self, p, self.n_steps)?;

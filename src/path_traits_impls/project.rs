@@ -14,6 +14,9 @@ pub(crate) fn coarse_project(
     query: crate::Point2,
     n_steps: usize,
 ) -> Result<(f64, f64, f64, f64), PathError<f64>> {
+    if n_steps == 0 {
+        return Err(PathError::degenerate("n_steps must be > 0"));
+    }
     let length = arc.length;
     if length <= 0.0 {
         return Err(PathError::degenerate("zero-length arc"));
